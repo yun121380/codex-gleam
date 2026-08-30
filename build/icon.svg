@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    拾光 / Gleam — 应用图标
+    渐变圆角方块 + 极简符号：一大一小两枚"光"。
+    只用纯路径和渐变，没有滤镜，缩到 16px 也不会糊。
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFC96B" />
+      <stop offset="42%" stop-color="#FF7E5F" />
+      <stop offset="100%" stop-color="#5B2C87" />
+    </linearGradient>
+
+    <!-- 左上角一点柔光，让平面的底色有厚度 -->
+    <radialGradient id="sheen" cx="0.28" cy="0.2" r="0.72">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.38" />
+      <stop offset="55%" stop-color="#FFFFFF" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0" />
+    </radialGradient>
+
+    <!-- 符号本身也做一点点渐变，避免死白 -->
+    <linearGradient id="spark" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#FFF1DC" />
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角方块本体。r = 22.5% 边长，贴近系统原生图标的曲率 -->
+  <rect x="64" y="64" width="896" height="896" rx="202" fill="url(#tile)" />
+  <rect x="64" y="64" width="896" height="896" rx="202" fill="url(#sheen)" />
+
+  <!-- 顶边高光：一条极淡的内描边，只在上半部分可见 -->
+  <rect
+    x="76"
+    y="76"
+    width="872"
+    height="872"
+    rx="190"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-opacity="0.22"
+    stroke-width="3"
+  />
+
+  <!-- 主符号：四角星，边缘内凹，中心 (462, 556)，外半径 218 -->
+  <path
+    d="M462 338
+       Q486 532, 680 556
+       Q486 580, 462 774
+       Q438 580, 244 556
+       Q438 532, 462 338 Z"
+    fill="url(#spark)"
+  />
+
+  <!-- 次符号：右上角一枚小的，呼应「拾起的那点光」 -->
+  <path
+    d="M726 268
+       Q736 348, 816 358
+       Q736 368, 726 448
+       Q716 368, 636 358
+       Q716 348, 726 268 Z"
+    fill="url(#spark)"
+    fill-opacity="0.92"
+  />
+</svg>

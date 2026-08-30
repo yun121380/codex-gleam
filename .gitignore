@@ -1,0 +1,18 @@
+node_modules/
+out/
+dist/
+release/
+coverage/
+.verify/
+.claude/
+.codex/
+assets/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.local
+.vite/
+*.tsbuildinfo
+# The old welcome screenshot contains a local Windows account name.
+docs/screenshots/01-welcome.png

@@ -1,0 +1,265 @@
+@import 'tailwindcss';
+
+/*
+ * 视觉基调：温暖的深色"工作台"。
+ * 深色背景带一点点棕调（而不是纯黑蓝调），配琥珀色强调色，
+ * 让这个工具看起来像一份纸质工作记录，而不是又一个冷冰冰的控制台。
+ *
+ * 字体全部使用系统自带字体栈：不下载、不打包字体文件，天然满足"不使用 CDN"。
+ */
+
+@theme {
+  --font-sans:
+    'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC',
+    system-ui, -apple-system, sans-serif;
+  --font-mono: Consolas, 'Cascadia Mono', 'Sarasa Mono SC', 'Courier New', monospace;
+
+  --color-canvas: #131210;
+  --color-surface: #1c1a17;
+  --color-surface-2: #232019;
+  --color-raised: #2a2620;
+  --color-line: #33302a;
+  --color-line-soft: #272420;
+  --color-ink: #ece7de;
+  --color-ink-soft: #a49c8f;
+  --color-ink-faint: #6f685d;
+
+  --color-accent: #e08c2f;
+  --color-accent-soft: #4a3419;
+  --color-accent-ink: #f5b45c;
+
+  --color-user: #6aa9f0;
+  --color-user-soft: #1c2c3f;
+  --color-assistant: #b28ce8;
+  --color-assistant-soft: #2c2340;
+  --color-tool: #d9a441;
+  --color-tool-soft: #3a2f18;
+  --color-shell: #e0a44a;
+  --color-shell-soft: #3b2e17;
+  --color-output: #93a2b3;
+  --color-output-soft: #262b31;
+  --color-file: #55c08a;
+  --color-file-soft: #16301f;
+  --color-diff: #4bb8b0;
+  --color-diff-soft: #12302e;
+  --color-test: #59c4c8;
+  --color-test-soft: #123033;
+  --color-error: #ef7676;
+  --color-error-soft: #3a1c1c;
+  --color-neutral: #8d867a;
+  --color-neutral-soft: #2a2722;
+
+  --color-ok: #4ea86f;
+  --color-warn: #d99e3f;
+  --color-danger: #e06767;
+
+  --radius-card: 0.75rem;
+}
+
+:root[data-theme='light'] {
+  --color-canvas: #f5f3ef;
+  --color-surface: #ffffff;
+  --color-surface-2: #faf8f4;
+  --color-raised: #f0ece4;
+  --color-line: #ddd7cc;
+  --color-line-soft: #e8e3da;
+  --color-ink: #232019;
+  --color-ink-soft: #5f594e;
+  --color-ink-faint: #8d867a;
+
+  --color-accent: #b5651d;
+  --color-accent-soft: #f6e6d2;
+  --color-accent-ink: #8f4d12;
+
+  --color-user: #2563eb;
+  --color-user-soft: #e0ecfd;
+  --color-assistant: #7c3aed;
+  --color-assistant-soft: #eee6fd;
+  --color-tool: #a16207;
+  --color-tool-soft: #f9edd4;
+  --color-shell: #b45309;
+  --color-shell-soft: #fbebd6;
+  --color-output: #475569;
+  --color-output-soft: #e9edf2;
+  --color-file: #15803d;
+  --color-file-soft: #dff3e6;
+  --color-diff: #0f766e;
+  --color-diff-soft: #d7f0ed;
+  --color-test: #0e7490;
+  --color-test-soft: #d6eef4;
+  --color-error: #b91c1c;
+  --color-error-soft: #fbe2e2;
+  --color-neutral: #6b6459;
+  --color-neutral-soft: #eceae5;
+
+  --color-ok: #15803d;
+  --color-warn: #a16207;
+  --color-danger: #b91c1c;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+}
+
+/* 细一点的滚动条，免得三栏里到处是粗条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-faint);
+  background-clip: content-box;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Markdown 渲染的排版规则 */
+.prose-cn {
+  word-break: break-word;
+}
+.prose-cn > *:first-child {
+  margin-top: 0;
+}
+.prose-cn > *:last-child {
+  margin-bottom: 0;
+}
+.prose-cn p {
+  margin: 0.7em 0;
+}
+.prose-cn h1,
+.prose-cn h2,
+.prose-cn h3,
+.prose-cn h4 {
+  margin: 1.3em 0 0.6em;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.prose-cn h1 {
+  font-size: 1.3em;
+}
+.prose-cn h2 {
+  font-size: 1.16em;
+}
+.prose-cn h3 {
+  font-size: 1.05em;
+}
+.prose-cn ul,
+.prose-cn ol {
+  margin: 0.7em 0;
+  padding-left: 1.5em;
+}
+.prose-cn ul {
+  list-style: disc;
+}
+.prose-cn ol {
+  list-style: decimal;
+}
+.prose-cn li {
+  margin: 0.3em 0;
+}
+.prose-cn a {
+  color: var(--color-accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: not-allowed;
+}
+.prose-cn code {
+  background: var(--color-raised);
+  border: 1px solid var(--color-line-soft);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  word-break: break-all;
+}
+.prose-cn pre {
+  background: var(--color-canvas);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 0.9em 0;
+}
+.prose-cn pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.86em;
+  line-height: 1.6;
+  white-space: pre;
+}
+.prose-cn blockquote {
+  margin: 0.9em 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 3px solid var(--color-line);
+  color: var(--color-ink-soft);
+}
+.prose-cn table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  font-size: 0.94em;
+}
+.prose-cn th,
+.prose-cn td {
+  border: 1px solid var(--color-line);
+  padding: 6px 10px;
+  text-align: left;
+}
+.prose-cn th {
+  background: var(--color-raised);
+  font-weight: 600;
+}
+.prose-cn hr {
+  border: none;
+  border-top: 1px solid var(--color-line);
+  margin: 1.4em 0;
+}
+.prose-cn img {
+  max-width: 100%;
+}

@@ -1,0 +1,127 @@
+[
+  {
+    "session_id": "demo-session-0003",
+    "name": "把打包时间从 40 秒压到 12 秒",
+    "workspace": "C:\\Users\\demo\\projects\\demo-dashboard",
+    "started_at": "2026-08-27T14:02:00Z",
+    "events": [
+      {
+        "kind": "user",
+        "at": "2026-08-27T14:02:00Z",
+        "content": "打包太慢了，每次要等 40 秒。看看能不能快一点。"
+      },
+      {
+        "kind": "shell",
+        "at": "2026-08-27T14:02:30Z",
+        "command": ["bash", "-lc", "npm run build -- --profile"]
+      },
+      {
+        "kind": "output",
+        "at": "2026-08-27T14:03:14Z",
+        "exit_code": 0,
+        "output": "vite v7.0.0 building for production...\n✓ 1284 modules transformed.\ndist/assets/index-8f3a1c.js   1,842.51 kB │ gzip: 512.30 kB\n\n(!) Some chunks are larger than 1500 kB after minification.\n✓ built in 39.84s\n"
+      },
+      {
+        "kind": "assistant",
+        "at": "2026-08-27T14:04:02Z",
+        "content": "瓶颈很清楚：所有东西被打进了一个 1.8 MB 的包。图表库和 Markdown 渲染器都是首屏用不到的，改成按需加载即可。"
+      },
+      {
+        "kind": "edit",
+        "at": "2026-08-27T14:06:20Z",
+        "path": "src/routes.tsx",
+        "before": "import { Reports } from './pages/Reports'\nimport { Editor } from './pages/Editor'\n\nexport const routes = [\n  { path: '/reports', element: <Reports /> },\n  { path: '/editor', element: <Editor /> }\n]\n",
+        "after": "import { lazy } from 'react'\n\nconst Reports = lazy(() => import('./pages/Reports'))\nconst Editor = lazy(() => import('./pages/Editor'))\n\nexport const routes = [\n  { path: '/reports', element: <Reports /> },\n  { path: '/editor', element: <Editor /> }\n]\n"
+      },
+      {
+        "kind": "shell",
+        "at": "2026-08-27T14:07:40Z",
+        "command": ["bash", "-lc", "npm run build"]
+      },
+      {
+        "kind": "output",
+        "at": "2026-08-27T14:07:53Z",
+        "exit_code": 0,
+        "output": "vite v7.0.0 building for production...\n✓ 1284 modules transformed.\ndist/assets/index-2b91ee.js     412.08 kB │ gzip: 128.44 kB\ndist/assets/Reports-6ac0d1.js   688.19 kB │ gzip: 201.77 kB\ndist/assets/Editor-19fd42.js    742.63 kB │ gzip: 214.05 kB\n✓ built in 12.31s\n"
+      },
+      {
+        "kind": "assistant",
+        "at": "2026-08-27T14:08:30Z",
+        "content": "从 39.8 秒降到 12.3 秒，首屏包也从 1.8 MB 降到 412 kB。只改了 `src/routes.tsx` 一个文件。"
+      }
+    ]
+  },
+  {
+    "session_id": "demo-session-0004",
+    "name": "修一个只在周日出现的定时任务 bug",
+    "workspace": "C:\\Users\\demo\\projects\\demo-crawler",
+    "started_at": "2026-08-28T08:31:00Z",
+    "events": [
+      {
+        "kind": "user",
+        "at": "2026-08-28T08:31:00Z",
+        "content": "每周日的定时任务都不跑，其他六天都正常。日志里没有报错。"
+      },
+      {
+        "kind": "shell",
+        "at": "2026-08-28T08:31:44Z",
+        "command": "grep -rn 'cron' src/scheduler"
+      },
+      {
+        "kind": "output",
+        "at": "2026-08-28T08:31:45Z",
+        "exit_code": 0,
+        "output": "src/scheduler/jobs.ts:14:  schedule: '0 3 * * 1-7',\n"
+      },
+      {
+        "kind": "assistant",
+        "at": "2026-08-28T08:32:30Z",
+        "content": "找到原因了。cron 的星期字段里，**0 表示周日，1-6 是周一到周六**。写成 `1-7` 之后，7 是个越界值，周日（0）根本没被包含进去。\n\n正确写法是 `0-6`，或者直接用 `*`。"
+      },
+      {
+        "kind": "edit",
+        "at": "2026-08-28T08:33:12Z",
+        "path": "src/scheduler/jobs.ts",
+        "diff": "--- src/scheduler/jobs.ts\n+++ src/scheduler/jobs.ts\n@@ -12,7 +12,7 @@\n export const dailyCrawl = {\n   name: 'daily-crawl',\n-  schedule: '0 3 * * 1-7',\n+  schedule: '0 3 * * *',\n   handler: crawlAll\n }\n"
+      },
+      {
+        "kind": "shell",
+        "at": "2026-08-28T08:34:00Z",
+        "command": "npx vitest run tests/scheduler"
+      },
+      {
+        "kind": "output",
+        "at": "2026-08-28T08:34:09Z",
+        "exit_code": 1,
+        "output": " ❯ tests/scheduler/jobs.test.ts (4 tests | 1 failed)\n   ✕ 应该在每天凌晨 3 点触发\n     → 期望 7 个触发时间点，实际得到 6 个\n\n Test Files  1 failed (1)\n      Tests  1 failed | 3 passed (4)\n"
+      },
+      {
+        "kind": "assistant",
+        "at": "2026-08-28T08:35:20Z",
+        "content": "测试自己也写错了 —— 它照抄了错误的 `1-7`，所以只算出 6 个时间点。更新测试里的期望值。"
+      },
+      {
+        "kind": "edit",
+        "at": "2026-08-28T08:36:05Z",
+        "path": "tests/scheduler/jobs.test.ts",
+        "diff": "--- tests/scheduler/jobs.test.ts\n+++ tests/scheduler/jobs.test.ts\n@@ -8,7 +8,7 @@\n   it('应该在每天凌晨 3 点触发', () => {\n     const hits = collectTriggers(dailyCrawl.schedule, oneWeek)\n-    expect(hits).toHaveLength(6)\n+    expect(hits).toHaveLength(7)\n   })\n"
+      },
+      {
+        "kind": "shell",
+        "at": "2026-08-28T08:36:40Z",
+        "command": "npx vitest run tests/scheduler"
+      },
+      {
+        "kind": "output",
+        "at": "2026-08-28T08:36:48Z",
+        "exit_code": 0,
+        "output": " ✓ tests/scheduler/jobs.test.ts (4 tests) 31ms\n\n Test Files  1 passed (1)\n      Tests  4 passed (4)\n"
+      },
+      {
+        "kind": "assistant",
+        "at": "2026-08-28T08:37:30Z",
+        "content": "修好了。一句话总结：cron 的星期是 0-6，`1-7` 会静默漏掉周日。改成 `*` 之后 4 个测试全部通过。\n\n顺带提醒：这类「静默失败」没有报错日志，建议给定时任务加一条「本次执行完成」的日志，下次能更快发现。"
+      }
+    ]
+  }
+]

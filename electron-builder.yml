@@ -1,0 +1,65 @@
+appId: com.gleam.desktop
+productName: 拾光
+copyright: 拾光 Gleam — 本地离线工具
+
+directories:
+  output: release
+  # 图标放在这里：build/icon.svg 是源文件，build/icon.png 由 `pnpm run icon` 生成，
+  # electron-builder 再从这张 1024 的 PNG 自动派生出各平台需要的尺寸。
+  buildResources: build
+
+# 渲染进程与主进程的代码都已由 electron-vite 打包进 out/，
+# 只有主进程运行时 require 的 diff 会作为生产依赖被自动带上。
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+
+extraResources:
+  - from: fixtures
+    to: fixtures
+    filter:
+      - '**/*'
+
+asar: true
+compression: normal
+
+# No auto-update: publishing is disabled entirely.
+publish: null
+electronUpdaterCompatibility: '>=0.0.0'
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 直接给 .ico，别让 electron-builder 自己从 PNG 转 —— 它内置的 WASM 转换器
+  # 在部分机器上会因为分配不到内存而整个打包失败。
+  icon: build/icon.ico
+  artifactName: Gleam-Setup-${version}-${arch}.${ext}
+  legalTrademarks: ''
+
+nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 拾光
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - dmg
+  icon: build/icon.png
+  category: public.app-category.developer-tools
+
+linux:
+  target:
+    - AppImage
+  icon: build/icon.png
+  category: Development

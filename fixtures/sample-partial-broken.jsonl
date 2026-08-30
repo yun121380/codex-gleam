@@ -1,0 +1,10 @@
+{"timestamp":"2026-08-28T15:00:00Z","type":"session_meta","payload":{"id":"demo-session-0005","cwd":"C:\\Users\\demo\\projects\\demo-notes","instructions":"这份示例故意包含损坏的行，用来演示「坏一行不影响整份会话」。"}}
+{"timestamp":"2026-08-28T15:00:12Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"把笔记导出功能里的文件名生成逻辑抽成一个函数，并补一个测试。"}]}}
+{"timestamp":"2026-08-28T15:00:31Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"好，我把文件名清理逻辑抽到 `src/export/fileName.ts`，顺便处理 Windows 下的非法字符。"}]}}
+{"timestamp":"2026-08-28T15:01:02Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","call_id":"call_broken_01","arguments":"{\"input\":\"*** Begin Patch\\n*** Add File: src/export/fileName.ts\\n+export function toSafeFileName(title: string): string {\\n+  return title.replace(/[\\\\\\\\/:*?\\\"<>|]/g, ' ').trim() || 'untitled'\\n+}\\n*** End Patch\\n\"}"}}
+{"timestamp":"2026-08-28T15:01:03Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_broken_01","output":"{\"output\":\"Success. Updated the following files:\\nA src/export/fileName.ts\\n\",\"metadata\":{\"exit_code\":0}}"}}
+{"timestamp":"2026-08-28T15:01:40Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id"
+{"timestamp":"2026-08-28T15:02:10Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call_broken_02","arguments":"{\"command\":[\"bash\",\"-lc\",\"npx vitest run tests/export\"]}"}}
+这一行根本不是 JSON，是写日志时不小心插进来的一段普通文字。
+{"timestamp":"2026-08-28T15:02:19Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_broken_02","output":"{\"output\":\" \\u2713 tests/export/fileName.test.ts (3 tests) 9ms\\n\\n Test Files  1 passed (1)\\n      Tests  3 passed (3)\\n\",\"metadata\":{\"exit_code\":0,\"duration_seconds\":1.4}}"}}
+{"timestamp":"2026-08-28T15:02:40Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"抽好了，3 个测试通过。注意这份日志中间有两行损坏 —— 查看器应该照常显示其余内容，并在上方给出提示。"}]}}

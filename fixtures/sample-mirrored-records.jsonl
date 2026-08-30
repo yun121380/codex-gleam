@@ -1,0 +1,16 @@
+{"timestamp":"2026-08-27T09:00:00.000Z","type":"session_meta","payload":{"id":"demo-session-0007","cwd":"C:\\Users\\demo\\projects\\demo-mirror","instructions":"虚构示例：演示同一条消息被两条通道各记录一遍。"}}
+{"timestamp":"2026-08-27T09:00:04.100Z","type":"event_msg","payload":{"type":"user_message","message":"帮我把重试次数从 3 次改成 5 次。"}}
+{"timestamp":"2026-08-27T09:00:04.200Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"帮我把重试次数从 3 次改成 5 次。"}]}}
+{"timestamp":"2026-08-27T09:00:07.500Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"先找到定义重试次数的常量，再确认有没有测试依赖这个值。"}}
+{"timestamp":"2026-08-27T09:00:07.600Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"先找到定义重试次数的常量，再确认有没有测试依赖这个值。"}]}}
+{"timestamp":"2026-08-27T09:00:09.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1200,"output_tokens":90,"total_tokens":1290}}}}
+{"timestamp":"2026-08-27T09:00:11.200Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_m_01","name":"exec","input":"const r = await tools.exec_command({cmd:\"npm test\", workdir:\"C:\\\\Users\\\\demo\\\\projects\\\\demo-mirror\"});"}}
+{"timestamp":"2026-08-27T09:00:16.400Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_m_01","output":[{"type":"input_text","text":"Output:\n Tests  1 failed | 4 passed (5)\n   ✕ 重试到第 5 次仍然失败时应放弃\n\nWall time 5.1 seconds"}]}}
+{"timestamp":"2026-08-27T09:00:19.700Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_m_02","name":"exec","input":"const patch = \"*** Begin Patch\\n*** Update File: src/retry.ts\\n@@\\n-export const MAX_RETRIES = 3\\n+export const MAX_RETRIES = 5\\n*** End Patch\\n\";\nawait tools.apply_patch({input: patch});"}}
+{"timestamp":"2026-08-27T09:00:19.900Z","type":"event_msg","payload":{"type":"patch_apply_end","success":true,"stdout":"M src/retry.ts"}}
+{"timestamp":"2026-08-27T09:00:20.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_m_02","output":[{"type":"input_text","text":"Output:\nSuccess. Updated the following files:\nM src/retry.ts\n\nWall time 0.1 seconds"}]}}
+{"timestamp":"2026-08-27T09:00:23.100Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_m_03","name":"exec","input":"const r = await tools.exec_command({cmd:\"npm test\", workdir:\"C:\\\\Users\\\\demo\\\\projects\\\\demo-mirror\"});"}}
+{"timestamp":"2026-08-27T09:00:28.600Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_m_03","output":[{"type":"input_text","text":"Output:\n Tests  5 passed (5)\n\nWall time 5.4 seconds"}]}}
+{"timestamp":"2026-08-27T09:00:31.000Z","type":"event_msg","payload":{"type":"agent_message","message":"改好了。`src/retry.ts` 里的 `MAX_RETRIES` 从 3 改成 5，5 个测试全部通过。"}}
+{"timestamp":"2026-08-27T09:00:31.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"改好了。`src/retry.ts` 里的 `MAX_RETRIES` 从 3 改成 5，5 个测试全部通过。"}]}}
+{"timestamp":"2026-08-27T09:00:33.400Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"另外提醒一句：重试次数调大以后，最坏情况下的等待时间也会跟着变长。"}]}}
