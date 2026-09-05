@@ -7,6 +7,11 @@ import { join } from 'node:path'
 const OUT_DIR = join('build', 'generated')
 const OUT_FILE = join(OUT_DIR, 'build-evidence.json')
 
+// vitest 在 CI 上会给输出上色，`Tests` 和数字之间夹着 ANSI 转义序列，
+// 不剥掉的话 \s+ 匹配不上。ESC 用 fromCharCode 拼出来，
+// 免得源码里出现一个看不见的控制字符（eslint 的 no-control-regex 也会拦）。
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g')
+
 /**
  * 跑一个命令并拿它的 stdout。失败一律返回 null —— 拿不到就说拿不到。
  *
@@ -29,9 +34,24 @@ function capture(command, args) {
       // 超了会抛 ENOBUFS，那就白白把 testCount 变成 null。
       maxBuffer: 64 * 1024 * 1024
     })
-  } catch {
+  } catch (error) {
+    // 拿不到就说拿不到 —— 但也要说清为什么。以前这里是个光秃秃的 catch，
+    // 结果 CI 上打出来的包里 testCount 是 null，构建日志里却一个字都没有，
+    // 完全没法追。字段照旧记 null，原因写到 stderr（也就是构建日志）里。
+    process.stderr.write(
+      `build evidence: \`${command} ${args.join(' ')}\` 没跑成，相关字段记为 null —— ${
+        error instanceof Error ? error.message : String(error)
+      }\n`
+    )
+    const childStderr = error && typeof error === 'object' ? error.stderr : null
+    if (childStderr) process.stderr.write(`${tail(String(childStderr), 20)}\n`)
     return null
   }
+}
+
+/** 取一段文本的最后 n 行，用来把子进程的输出摘进日志。 */
+function tail(text, n) {
+  return text.trimEnd().split(/\r?\n/).slice(-n).join('\n')
 }
 
 /** @param {{gitSha: string | null; testCount: number | null; platform: string; builtAt: string}} input */
@@ -53,8 +73,16 @@ function readGitSha() {
 function readTestCount() {
   const output = capture('pnpm', ['test'])
   if (output === null) return null
-  const match = /Tests\s+(\d+)\s+passed/.exec(output)
-  return match ? Number(match[1]) : null
+  const plain = output.replace(ANSI, '')
+  const match = /Tests\s+(\d+)\s+passed/.exec(plain)
+  if (!match) {
+    process.stderr.write(
+      'build evidence: `pnpm test` 跑通了，但输出里找不到 "Tests N passed"，testCount 记为 null。输出末尾：\n'
+    )
+    process.stderr.write(`${tail(plain, 15)}\n`)
+    return null
+  }
+  return Number(match[1])
 }
 
 export async function main() {
