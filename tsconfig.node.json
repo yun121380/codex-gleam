@@ -16,6 +16,11 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
+    // 构建期脚本（scripts/*.mjs）是纯 JS：它们必须能被 node 直接执行，
+    // 所以不编译成 TS。tests/scripts/ 里的测试要 import 它们，
+    // 于是这里开 allowJs，让 tsc 从脚本的 JSDoc 里推出类型。
+    // 不开 checkJs —— 只推类型，不在 JS 内部报错。
+    "allowJs": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true,
@@ -30,6 +35,9 @@
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",
     "tests/**/*.ts",
+    // composite 项目必须把所有会被引用到的文件都列出来（否则 TS6307），
+    // 而 tests/scripts/ 会 import 这些构建期脚本。
+    "scripts/**/*.mjs",
     "electron.vite.config.ts",
     "vitest.config.ts"
   ],
