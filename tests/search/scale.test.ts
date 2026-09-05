@@ -10,8 +10,13 @@
  * `Object.keys(index.terms)` 一次），而不是因为 CI 那台机器今天慢了三倍。
  */
 import { beforeAll, describe, expect, it } from 'vitest'
-import { SEARCH_MAX_EXPANSION } from '../../src/shared/constants'
-import { emptyIndex, mergeIndex, queryIndex } from '../../src/main/search/invertedIndex'
+import { SEARCH_INDEX_BUDGET_BYTES, SEARCH_MAX_EXPANSION } from '../../src/shared/constants'
+import {
+  emptyIndex,
+  estimateIndexBytes,
+  mergeIndex,
+  queryIndex
+} from '../../src/main/search/invertedIndex'
 import { parseQuery } from '../../src/main/search/tokenize'
 import type { SearchIndexFile } from '../../src/shared/types'
 
@@ -78,17 +83,23 @@ function sessionTerms(at: number): Set<string> {
 
 let index: SearchIndexFile
 
-beforeAll(() => {
+/** 同一份数据建一张表。`budgetBytes` 留空就是产品里那 30 MB 的默认预算。 */
+function buildIndex(budgetBytes?: number): SearchIndexFile {
   const added = new Map<string, ReadonlySet<string>>()
   for (let at = 0; at < SESSION_COUNT; at += 1) {
     added.set(`session-${at.toString().padStart(4, '0')}`, sessionTerms(at))
   }
-  index = mergeIndex({
+  return mergeIndex({
     previous: emptyIndex(),
     removed: new Set<string>(),
     added,
-    builtAt: '2026-09-05T12:00:00.000Z'
+    builtAt: '2026-09-05T12:00:00.000Z',
+    budgetBytes
   })
+}
+
+beforeAll(() => {
+  index = buildIndex()
 })
 
 /**
@@ -169,5 +180,42 @@ describe('674 会话的表', () => {
     expect(result.sessionIds).toEqual([])
     expect(result.unmatched).toEqual(['zzqqxx'])
     expectWithinBudget('全表扫两遍', elapsedMs)
+  })
+})
+
+/**
+ * 体积预算这一层在验收规模上的样子。
+ *
+ * 单元那一侧（`invertedIndex.test.ts` 的「体积预算」）用三个会话验的是裁表的**规则**：
+ * 先丢 df 最高的词、条数记进 `droppedTerms`、裁过的表照样能查。这里问的是另一个问题 ——
+ * 674 个会话这个真实规模，离那 30 MB 到底还有多远。
+ */
+describe('674 会话的表与体积预算', () => {
+  it('离预算还有余量，所以上面那些计时量的是一张完整的表', () => {
+    const bytes = estimateIndexBytes(index.terms)
+    expect(
+      bytes,
+      `约 ${(bytes / 1024 / 1024).toFixed(1)} MB，占预算 ${((bytes / SEARCH_INDEX_BUDGET_BYTES) * 100).toFixed(1)}%`
+    ).toBeLessThan(SEARCH_INDEX_BUDGET_BYTES)
+  })
+
+  it('预算真绷不住时：表还能查，被裁掉的词不静默', () => {
+    // 674 个会话本身撑不到 30 MB（上一条就是这么断言的），所以"超预算"这条路只能靠
+    // 把预算调小来走。取实测体积的四分之一：不管这张表将来长到多大，它一定超。
+    const trimmed = buildIndex(Math.floor(estimateIndexBytes(index.terms) / 4))
+    expect(trimmed.droppedTerms).toBeGreaterThan(0)
+
+    // 裁的是词条，不是会话：名单一个不少，剩下的每条 postings 都还指向合法下标。
+    // 一张下标越界的表会让 queryIndex 吐出一堆 undefined 会话 id，那比没有索引更难查。
+    expect(trimmed.sessionIds).toHaveLength(SESSION_COUNT)
+    const outOfRange = Object.entries(trimmed.terms)
+      .filter(([, postings]) => postings.some((at) => trimmed.sessionIds[at] === undefined))
+      .map(([term]) => term)
+    expect(outOfRange).toEqual([])
+
+    // 丢的是 df 最高的那些词，`lint` 在 674 个会话里全都有，必然是最先被丢的一批。
+    // 它必须落进 unmatched —— 界面据此说"结果可能不全"，绝不装作库里没这个词。
+    expect(trimmed.terms).not.toHaveProperty('lint')
+    expect(queryIndex(trimmed, parseQuery('lint')).unmatched).toEqual(['lint'])
   })
 })

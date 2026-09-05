@@ -165,6 +165,12 @@ export function SettingsPage(): React.JSX.Element {
             description="密钥、Token、密码、Authorization、Cookie 等会显示成 [已打码]。强烈建议保持开启。"
           />
           <Toggle
+            checked={settings.buildSearchIndex}
+            onChange={(value) => void actions.updateSettings({ buildSearchIndex: value })}
+            label="建立全文搜索索引"
+            description="在本机建一份倒排索引，让搜索能覆盖全部会话的正文。索引只建在打码之后的文本上：密钥不会进索引，代价是也搜不到它们。关掉后搜索只能搜标题，磁盘上也不会留这份文本。"
+          />
+          <Toggle
             checked={settings.showFullPaths}
             onChange={(value) => void actions.updateSettings({ showFullPaths: value })}
             label="显示完整文件路径"
@@ -281,8 +287,9 @@ export function SettingsPage(): React.JSX.Element {
         <Card className="mt-3">
           <SectionTitle>本地数据</SectionTitle>
           <p className="text-[12.5px] leading-relaxed text-ink-soft">
-            本应用只保存一份"索引"（会话摘要）和这些设置。清空索引不会删除、修改或移动你的任何 Codex
-            原始文件 —— 重新扫描就能再找回来。
+            本应用在本机只保存三样东西：一份"索引"（会话摘要）、一份全文搜索用的倒排表（开着上面那个
+            开关时才有），以及这些设置。清空本地索引会把前两样一起删掉；关掉全文索引开关会当场删掉倒排表。
+            这些操作都不会删除、修改或移动你的任何 Codex 原始文件 —— 重新扫描就能再找回来。
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button icon={RefreshCw} onClick={() => void actions.startScan()}>

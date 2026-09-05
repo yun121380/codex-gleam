@@ -10,6 +10,8 @@ import type {
   ScanProgress,
   ScanRequest,
   ScanResult,
+  SearchRequest,
+  SearchResponse,
   SessionSummary,
   StatsOverview
 } from './types'
@@ -32,6 +34,7 @@ export const IPC = {
   sessionsClear: 'sessions:clear',
   sessionsImport: 'sessions:import',
   sessionsLoadSample: 'sessions:load-sample',
+  sessionsSearch: 'sessions:search',
 
   statsGet: 'stats:get',
   exportSession: 'export:session',
@@ -68,6 +71,11 @@ export interface GleamApi {
   clearIndex(): Promise<SessionSummary[]>
   importFiles(): Promise<ImportResult>
   loadSampleData(): Promise<ImportResult>
+  /**
+   * 跨会话搜索。不带 `sessionId` 是第一层（哪些会话里有这些词），带上就多跑一层
+   * 定位（这个会话里命中在哪几条事件上）。两种都走同一个频道，省掉一次往返。
+   */
+  searchSessions(request: SearchRequest): Promise<SearchResponse>
 
   getStats(): Promise<StatsOverview>
   exportSession(request: ExportRequest): Promise<ExportResult>

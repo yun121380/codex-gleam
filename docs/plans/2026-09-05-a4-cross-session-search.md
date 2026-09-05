@@ -440,9 +440,9 @@ export function queryIndex(index: SearchIndexFile, parsed: ParsedQuery): {
 }
 ```
 
-某个词一档都没扩展出来时，**不能悄悄把它当不存在**（那会变成"搜两个词实际只搜了一个"），要么整个查询返回空、要么把它记进 `unmatched` 让界面说清"『xxx』没有出现在索引里"。取后者。
+某个词一档都没扩展出来时，**不能悄悄把它当不存在**（那会变成"搜两个词实际只搜了一个"），要么整个查询返回空、要么把它记进 `unmatched` 让界面说清"「xxx」没有出现在索引里"。取后者。
 
-**但 `unmatched` 里会混进用户没打过的词。** 中文查询的跨词 bigram（`部署构建` 里的 `署构`）必然落进来，把它原样念给用户听是句胡话——那个"词"是分词器造的。Task 9 显示时要过一遍：只显示在原始查询串里能原样找到的那些。这件事放在渲染层是因为只有那里还留着用户打的原文；这一层只管把事实报全。
+**但 `unmatched` 里会混进用户没打过的词。** 中文查询的跨词 bigram（`部署构建` 里的 `署构`）必然落进来，把它原样念给用户听是句胡话——那个"词"是分词器造的。Task 9 显示时要过一遍：只念**用户自己按分隔符分出来的那一段**。这件事放在渲染层是因为只有那里还留着用户打的原文；这一层只管把事实报全。
 
 - [ ] **Step 7: `readIndexFile(value)` 把外部数据当外部数据。** 磁盘上的文件可能是旧版本、可能被截断、可能被别的进程写坏。逐字段校验，任何一处对不上就返回 `null`（调用方据此走降级），**不做半信半疑的修补**——一张缺了一半 postings 的倒排表比没有表更糟，它会让搜索静默地漏结果。`version` 不等于 `SEARCH_INDEX_VERSION` 也返回 `null`：这份文件随时能从原始会话重建，不值得为它写迁移代码。
 
@@ -691,7 +691,7 @@ private titleOnlyIndex(): SearchIndexFile {
 设计稿给搜索的配额是一个方法（19 → 22 里的第一个），两层共用它，靠 `sessionId` 区分。
 
 **Files:**
-- Modify: `src/shared/ipc.ts`, `src/shared/types.ts`（`GleamApi`）, `src/main/ipc.ts`, `src/preload/api.ts`
+- Modify: `src/shared/ipc.ts`（频道名与 `GleamApi` 都在这个文件里）, `src/main/ipc.ts`, `src/preload/api.ts`
 - Test: 由 Task 6 / Task 7 的测试覆盖（IPC 层本身只是转发，没有自己的逻辑）
 
 **Interfaces:**
@@ -713,8 +713,9 @@ private titleOnlyIndex(): SearchIndexFile {
 现在 `SessionList` 里那个 `<input placeholder="搜索标题、项目或文件名">` 只在已加载的摘要上过滤。它继续留在原位，但多一层：本地过滤照旧即时生效，全文结果异步回来后合并进来。
 
 **Files:**
-- Modify: `src/renderer/hooks/useAppStore.tsx`, `src/renderer/components/SessionList.tsx`
-- Test: 现有 `tests/renderer/*` 的形态（纯函数层）+ 手动过一遍
+- Create: `src/renderer/lib/searchNotice.ts`（发不发这次请求 + 那一行话，都是纯函数）
+- Modify: `src/renderer/hooks/useAppStore.tsx`, `src/renderer/components/SessionList.tsx`, `src/renderer/pages/SessionsPage.tsx`（三个新 prop 从这里传下去）, `src/shared/constants.ts`（防抖与最短查询长度两个常量）
+- Test: `tests/renderer/searchNotice.test.ts`（纯函数层）+ 手动过一遍
 
 **Interfaces:**
 - Consumes: `window.gleam.searchSessions`（Task 8）
@@ -729,11 +730,15 @@ private titleOnlyIndex(): SearchIndexFile {
 - [ ] **Step 4: 搜索框下面一行，说清这次搜了什么。** 这是"没有数据就说没有"在这一期的落点，四种话术：
 
   - 正常：`全文命中 N 个会话`
-  - 降级：`只搜了标题 —— 还没有全文索引，重新扫描一次就能建好。`（开关关着时换成 `全文索引已关闭，只搜了标题。`）
-  - 有丢词：`全文命中 N 个会话（索引超出上限丢了 M 个高频词，结果可能不全）`
-  - 有 `unmatched`：`『xxx』没有出现在索引里`
+  - 降级：直接把 `response.notice` 原样念出来（`还没有全文索引（或索引已损坏），这次只搜了标题。重新扫描一次就能建好。` / 开关关着时是 `全文索引已关闭，这次只搜了标题。`）
+  - 有丢词：`全文命中 N 个会话；` 后面接上主进程那句 `索引超出体积上限，丢掉了 M 个高频词，结果可能不全。`
+  - 有 `unmatched`：`「xxx」没有出现在索引里`
 
-  第四句只念**在原始查询串里能原样找到的**那些词。中文查询的跨词 bigram 必然出现在 `unmatched` 里（`部署构建` → `署构`），而用户从没打过那个"词"，念出来只会让人怀疑是不是自己打错了。过滤靠的就是这里还留着的原文，第一层没有它。
+  三句降级 / 丢词的措辞都不在渲染层重写，只转述 `response.notice`：丢了多少个词只有主进程数得清，界面再算一遍就是两处真相。
+
+  **降级时那一行绝不带数字。** 只搜了标题的"命中 N 个会话"会被当成全文结果，那正是这一行最该防住的误解。
+
+  第四句只念**用户自己分出来的那一段**：把查询串按分隔符（空白、标点、引号）切开，只念**整段等于**那个词条的。中文查询的跨词 bigram 必然出现在 `unmatched` 里（`部署构建` → `署构`），而用户从没打过那个"词"，念出来只会让人怀疑是不是自己打错了。这里不能用"在查询串里能原样找到"当判据——中文连写的一整串没有内部分隔符，它的每个 bigram 都是这串的子串，包括跨词那个。于是 `部署 构建` 里没进索引的那一半会念出来，而 `部署构建` 这一整串里的 bigram 一个都不念：那一串里压根没有对得上用户认知的词，"命中 0 个会话"本身已经说清了结果。过滤靠的就是这里还留着的原文，第一层没有它。
 
   这一行**不能省**：省掉它，用户就会把"降级只搜了标题"当成"库里真的没有"。
 
@@ -744,20 +749,32 @@ private titleOnlyIndex(): SearchIndexFile {
 ### Task 10: 命中定位与设置开关
 
 **Files:**
-- Modify: `src/renderer/pages/SessionsPage.tsx`, `src/renderer/pages/SettingsPage.tsx`
-- Test: 手动过一遍（这两处是纯装配，逻辑都在已测的模块里）
+- Modify: `src/renderer/hooks/useAppStore.tsx`, `src/renderer/pages/SessionsPage.tsx`, `src/renderer/pages/SettingsPage.tsx`
+- Test: 手动过一遍（这两个页面是纯装配，逻辑都在已测的模块里）
 
 **Interfaces:**
-- Consumes: `searchQuery`（Task 9）、`window.gleam.searchSessions` 的第二层形态（Task 8）、现有的 `cursor: {sessionId, index}` / `setEventIndex`
-- Produces: 无
+- Consumes: `searchQuery` / `searchResult`（Task 9）、`window.gleam.searchSessions` 的第二层形态（Task 8）、现有的 `cursor: {sessionId, index}` / `setEventIndex`
+- Produces: `SessionHits`（store 里新的一片状态：`sessionId` / `query` / `hits` / `capped` / `candidate`）——步进器与自动跳转都读它
 
 - [ ] **Step 1: 点开一个会话时，带着当前查询串发一次第二层请求。** 有查询串才发；没有就一次都不发（不能让"平常点开会话"这条路多一次解析）。
 
-- [ ] **Step 2: 自动跳到第一处命中。** 拿 `hits[0].eventIndex` 调现有的 `setEventIndex`。这是这一期"点进去能跳到命中的那一步"的兑现处。跳转要走现有的 cursor 路径，不新造一套滚动逻辑。
+  触发条件挂在 `searchResult` 上而不是 `searchQuery` 上，白拿它两件好处：它已经防抖过（不会每敲一个字就解析一次文件），而且它带着第一层的候选名单 `sessionIds`——Step 4 那句话正需要那份名单。没有查询串时它本来就是 `null`，于是"一次都不发"是自然结果，不需要额外判断。
 
-- [ ] **Step 3: 头部一个紧凑的步进器：`命中 N 处 ‹ ›`。** 前后两个按钮循环走 `hits`。命中 0 处时显示一句话而不是禁用按钮——理由与 A3 那个复制按钮完全相同：禁用态带 `pointer-events-none`，鼠标悬不上去，`title` 里的原因永远看不到。
+  拿到的那份命中**不在 effect 里清**。"这份命中还对不对得上当前会话与当前查询"是读的时候算的一次派生（`sessionId` 与 `query` 都跟着 `SessionHits` 一起存，就是为了这一步）。这样清掉搜索框的那一帧命中就消失了，而不是挂着等第二层的下一趟请求回来；顺带也不必在 effect 里同步 `setState`——那会触发级联渲染，`react-hooks/set-state-in-effect` 直接判错。
 
-- [ ] **Step 4: 第一层说命中、第二层找不到时，要说实话。** 正常情况下不该发生（Task 7 Step 7 那条一致性测试盯着它），但 bigram 天然会误召回（搜"离线自检"，某个会话里有"离线"和"自检"却不相邻）。这种情况显示 `这个会话里没找到完整匹配（索引按两字一组检索，可能多给了候选）`，不显示"命中 0 处"了事。
+- [ ] **Step 2: 自动跳到第一处命中。** 拿 `hits[0].eventIndex` 调现有的 `setEventIndex`。这是这一期"点进去能跳到命中的那一步"的兑现处。跳转要走现有的 cursor 路径，不新造一套滚动逻辑（`setEventIndex` 因此要包一层 `useCallback`，只跟着 `selectedId` 变——它得进 effect 的依赖表，不能每次渲染都换一个新函数）。
+
+  每个「会话 + 查询串」只跳一次，用一个 ref 记住跳过没有。跳完之后用户在时间线上翻到哪儿就留在哪儿：一次重渲染、或者同一份命中因为别的状态变化又回来一次，都不该把他拽回第一处。
+
+- [ ] **Step 3: 头部一个紧凑的步进器：`命中 N 处 ‹ ›`。** 前后两个按钮循环走 `hits`，顺序就是时间线顺序（`locate.ts` 不按相关度排）。光标不在任何一处命中上时（`position === -1`），「下一处」从第一处开始，「上一处」从最后一处开始。
+
+  命中 0 处时显示一句话而不是禁用按钮——理由与 A3 那个复制按钮完全相同：禁用态带 `pointer-events-none`，鼠标悬不上去，`title` 里的原因永远看不到。
+
+  撞到每会话上限时数字写成 `命中 200+ 处`，那个 `+` 是必须的：`hits.length` 此时是被截断的，不加就是谎报。数字从 `SEARCH_MAX_HITS_PER_SESSION` 插值来，不写死。
+
+- [ ] **Step 4: 第一层说命中、第二层找不到时，要说实话。** 正常情况下不该发生（Task 7 Step 7 那条一致性测试盯的是字段范围，不是这个），但有两条路真的会走到这儿：bigram 天然会误召回（搜"离线自检"，某个会话里有"离线"和"自检"却不相邻）；命中的那一段正好落在被换成 `~` 的用户目录上——那段文本进了第一层的倒排表，却不在界面显示的正文里（见 `library.locateIn` 那处注释）。这种情况显示 `这个会话里没找到完整匹配（索引按两字一组检索，可能多给了候选）`，两条成因都写进 `title`，不显示"命中 0 处"了事。
+
+  会话根本不在第一层的候选名单里（`candidate === false`）时是另一句话：`这个会话的正文里没有这个词`。它能出现在屏幕上有三种正当理由——标题 / 项目名 / 文件名本地匹配上了、被排序截在 `SEARCH_DEFAULT_LIMIT` 之外、或者搜索之前它就开着——这句话在三种情况下都成立，所以不必分三句说。
 
 - [ ] **Step 5: 设置页加开关。** 放在"隐私与显示"那张卡里，紧跟打码开关——它们是同一类决定（什么东西可以落盘）：
 
@@ -768,7 +785,7 @@ private titleOnlyIndex(): SearchIndexFile {
 关掉后搜索只能搜标题，磁盘上也不会留这份文本。
 ```
 
-- [ ] **Step 6: 设置页"本地数据"那段的措辞要跟着改。** 它现在写着"本应用只保存一份『索引』（会话摘要）和这些设置"——第四个文件出现之后这句话不再准确。改成把全文索引也点出来，并说明清空索引会把它一起删掉。
+- [ ] **Step 6: 设置页"本地数据"那段的措辞要跟着改。** 它现在写着"本应用只保存一份"索引"（会话摘要）和这些设置"——第四个文件出现之后这句话不再准确。改成把全文索引也点出来，并说明清空索引会把它一起删掉，以及关掉上面那个开关会**当场**删掉倒排表（`library.updateSettings` 就是这么做的，所以这句话是陈述而不是承诺）。
 
 ---
 
@@ -782,6 +799,8 @@ private titleOnlyIndex(): SearchIndexFile {
 
 同时把"索引与设置只保存在你本机的应用数据目录中"那条覆盖到第四个文件——设计稿明确要求新文件列进 `privacyNotice` 的输出。
 
+- [ ] **Step 1b: 隐私页那张"本应用在你电脑上写了什么"卡要改，它现在是错的。** 上面写着"只有两类文件……事件正文不会被复制出来"——倒排表恰恰是从正文里抽出来的词，这句话在开着开关时不成立。改成三类文件，并且把倒排表**装不下什么**说清楚：它只有"哪个词出现在哪些会话里"，没有词的顺序、上下文和原句（`terms: Record<string, number[]>`，postings 是会话下标，不是位置），所以拼不回任何一段正文；命中的具体位置是每次点开会话时重新解析原始文件算出来的。这句"拼不回正文"比"不复制正文"更强，而且是真的。
+
 - [ ] **Step 2: 红线复查。** 新增四个模块自动进 `tests/security/offline.test.ts` 的扫描范围，但手动再过一遍：
 
 ```bash
@@ -790,20 +809,29 @@ grep -rn "child_process\|spawn(\|execFile(\|execSync(\|new Function(\|eval(" src
 
 只该匹配到注释里提"child_process 是红线"的那几处散文。
 
-- [ ] **Step 3: 性能验收——`tests/search/scale.test.ts`。** 合成 674 个会话（每个几十条事件、正文里混中英文），建一次表，然后测第一层查询：
+- [ ] **Step 3: 性能验收——`tests/search/scale.test.ts`。** 合成 674 个会话（每个取一千多个词、词池四万条、长短各异，正文里混中英文），建一次表，然后**逐条**测第一层查询：
 
 ```ts
-it('674 个会话下第一层查询远快于 200 ms', () => {
-  const started = performance.now()
-  for (const query of QUERIES) queryIndex(index, parseQuery(query))
-  const perQuery = (performance.now() - started) / QUERIES.length
-  expect(perQuery).toBeLessThan(200)
-})
+function measure(query: string): { elapsedMs: number; result: ReturnType<typeof queryIndex> } {
+  const parsed = parseQuery(query)
+  let result = queryIndex(index, parsed) // 热身，让 JIT 先把代码编出来
+  let best = Number.POSITIVE_INFINITY
+  for (let round = 0; round < 3; round += 1) {
+    const startedAt = performance.now()
+    result = queryIndex(index, parsed)
+    best = Math.min(best, performance.now() - startedAt)
+  }
+  return { elapsedMs: best, result }
+}
 ```
 
-第一层的实际耗时是**毫秒级**（求交集只碰几个数组），所以 200 ms 这个界宽到不会在 CI 的任何一台机器上抖。要是哪天它红了，那说明真的退化了一个量级，不是环境慢。
+一条查询一条断言，不取平均：验收行说的是"查询 < 200 ms"，平均值会让一条慢十倍的查询藏在一堆快的后面。取三轮里最快的那次也不是为了好看——这里问的是"这个算法够不够快"，一次 GC 或者一次被抢走时间片不该算进答案。
 
-同一个测试里断言表的估算体积在预算内，以及"如果超了，`droppedTerms > 0` 且表仍然可查"。
+要测的是六条**不同代价**的路，而不是同一条快路重复六遍：热词精确命中（全表最长的 postings）、双热词求交集、中文跨词 bigram（`部署构建` 中间那个 `署构` 任何真实文本里都没有，必然走扩展那一层铺开四万个词条）、热词配低频词（交集退化到低频词一侧）、前缀扩展撞上 `SEARCH_MAX_EXPANSION`、以及一个词都命中不了（前缀与子串两层都走满整张词表）。每条断言都把实测耗时写进 message，CI 日志里得能看见它跑了多久。
+
+第一层的实际耗时是**毫秒级**（求交集只碰几个数组），所以 200 ms 这个界宽到不会在 CI 的任何一台机器上抖。要是哪天它红了，最可能的原因是有人把一个 O(词表) 的动作挪进了每个查询词的循环里，而不是环境慢。
+
+体积预算另起一个 describe：先断言这张表离 30 MB 还有余量（把 MB 数与占比写进 message——上面那些计时只有在"量的是一张完整的表"时才算数，而 `droppedTerms === 0` 与这条余量断言合起来才说明这一点），再把预算调到实测体积的四分之一走一遍超预算的路，断言 `droppedTerms > 0`、会话名单一个不少、剩下的 postings 没有越界下标、并且被裁掉的高频词落进 `unmatched` 而不是静默消失。这条用的估算函数必须是 `trimToBudget` 那一个（`estimateIndexBytes` 因此从 `invertedIndex.ts` 导出）——测试和裁表要是各拿一把尺子，量的就是两个数。
 
 - [ ] **Step 4: `pnpm verify` 全绿。** typecheck + lint + 全部测试。注意 vitest **不做** typecheck，所以不能拿测试绿当类型没问题；`noUncheckedIndexedAccess` 开着，倒排表里大量 `terms[word]` 与 `sessionIds[i]` 的下标访问都得显式处理 `undefined`。
 

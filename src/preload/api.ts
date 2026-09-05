@@ -4,7 +4,8 @@ import type {
   AppSettings,
   ExportRequest,
   ScanProgress,
-  ScanRequest
+  ScanRequest,
+  SearchRequest
 } from '@shared/types'
 
 /**
@@ -36,6 +37,7 @@ export const gleamApi: GleamApi = {
   clearIndex: () => ipcRenderer.invoke(IPC.sessionsClear),
   importFiles: () => ipcRenderer.invoke(IPC.sessionsImport),
   loadSampleData: () => ipcRenderer.invoke(IPC.sessionsLoadSample),
+  searchSessions: (request: SearchRequest) => ipcRenderer.invoke(IPC.sessionsSearch, request),
 
   getStats: () => ipcRenderer.invoke(IPC.statsGet),
   exportSession: (request: ExportRequest) => ipcRenderer.invoke(IPC.exportSession, request),

@@ -162,7 +162,13 @@ function termBytes(term: string, postings: number[]): number {
   return Buffer.byteLength(term) + 6 + postings.length * 4
 }
 
-function estimateBytes(terms: Record<string, number[]>): number {
+/**
+ * 整张词表落盘要多少字节。
+ *
+ * 导出是给验收规模那条测试用的：它要在 674 个会话的表上把余量打印出来，
+ * 而"余量"必须跟裁表用的是同一把尺子，否则那条测试量的是另一个数。
+ */
+export function estimateIndexBytes(terms: Record<string, number[]>): number {
   let bytes = 0
   for (const [term, postings] of Object.entries(terms)) bytes += termBytes(term, postings)
   return bytes
@@ -180,7 +186,7 @@ function estimateBytes(terms: Record<string, number[]>): number {
  */
 function trimToBudget(terms: Record<string, number[]>, budgetBytes?: number): number {
   const budget = budgetBytes ?? SEARCH_INDEX_BUDGET_BYTES
-  let bytes = estimateBytes(terms)
+  let bytes = estimateIndexBytes(terms)
   if (bytes <= budget) return 0
 
   const ordered = Object.keys(terms).sort((left, right) => {

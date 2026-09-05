@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ChevronLeft,
+  ChevronRight,
   CircleAlert,
   Download,
   FolderOpen,
@@ -11,6 +13,7 @@ import {
   TriangleAlert
 } from 'lucide-react'
 import type { AppSettings, ExportFormat, ExportOptions, UsageSummary } from '@shared/types'
+import { SEARCH_MAX_HITS_PER_SESSION } from '@shared/constants'
 import { DetailPanel } from '../components/DetailPanel'
 import { ExportDialog } from '../components/ExportDialog'
 import { SessionList } from '../components/SessionList'
@@ -26,10 +29,21 @@ import {
   truncateMiddle
 } from '../lib/format'
 import { buildResumeCommand } from '../lib/resumeCommand'
-import { useApp } from '../hooks/useAppStore'
+import { useApp, type SessionHits } from '../hooks/useAppStore'
 
 export function SessionsPage(): React.JSX.Element {
-  const { sessions, selectedId, detail, detailLoading, settings, bootstrap, actions } = useApp()
+  const {
+    sessions,
+    selectedId,
+    detail,
+    detailLoading,
+    settings,
+    bootstrap,
+    searchQuery,
+    searchResult,
+    sessionHits,
+    actions
+  } = useApp()
   const [exportOpen, setExportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
 
@@ -42,7 +56,28 @@ export function SessionsPage(): React.JSX.Element {
     index: 0
   })
   const eventIndex = cursor.sessionId === selectedId ? cursor.index : 0
-  const setEventIndex = (index: number): void => setCursor({ sessionId: selectedId, index })
+  const setEventIndex = useCallback(
+    (index: number): void => setCursor({ sessionId: selectedId, index }),
+    [selectedId]
+  )
+
+  /**
+   * 搜过之后点进来，自动停在第一处命中 —— 这一期"点进去能跳到命中的那一步"落在这里。
+   *
+   * 每个「会话 + 查询串」只跳一次。跳完之后用户在时间线上翻到哪儿就留在哪儿：一次重渲染、
+   * 或者同一份命中因为别的状态变化又回来一次，都不该把他拽回第一处。
+   */
+  const jumped = useRef<string | null>(null)
+  useEffect(() => {
+    if (sessionHits === null || sessionHits.sessionId !== selectedId) return
+    const first = sessionHits.hits[0]
+    if (first === undefined) return
+
+    const key = `${sessionHits.sessionId}|${sessionHits.query}`
+    if (jumped.current === key) return
+    jumped.current = key
+    setEventIndex(first.eventIndex)
+  }, [selectedId, sessionHits, setEventIndex])
 
   const currentEvent = useMemo(() => {
     if (!detail) return null
@@ -96,6 +131,9 @@ export function SessionsPage(): React.JSX.Element {
           onRescan={() => void actions.startScan()}
           onImport={() => void actions.importFiles()}
           onPickFolder={() => void actions.pickFolderAndScan()}
+          searchQuery={searchQuery}
+          searchResult={searchResult}
+          onSearchQueryChange={actions.setSearchQuery}
         />
       </aside>
 
@@ -104,6 +142,8 @@ export function SessionsPage(): React.JSX.Element {
           <SessionHeader
             onExport={() => setExportOpen(true)}
             onReveal={() => void actions.revealInFolder(detail.sourceFile)}
+            eventIndex={eventIndex}
+            onSelectIndex={setEventIndex}
           />
         ) : null}
 
@@ -155,12 +195,17 @@ export function SessionsPage(): React.JSX.Element {
 
 function SessionHeader({
   onExport,
-  onReveal
+  onReveal,
+  eventIndex,
+  onSelectIndex
 }: {
   onExport: () => void
   onReveal: () => void
+  /** 当前停在第几步。步进器要靠它算出"现在是第几处命中"。 */
+  eventIndex: number
+  onSelectIndex: (index: number) => void
 }): React.JSX.Element | null {
-  const { detail, settings, bootstrap } = useApp()
+  const { detail, settings, bootstrap, sessionHits } = useApp()
   const [copied, setCopied] = useState(false)
 
   // 复制反馈 1500 ms 后自己消失，与 DetailPanel 里的命令块同一套。
@@ -171,6 +216,11 @@ function SessionHeader({
   }, [copied])
 
   if (!detail) return null
+
+  // store 已经按"当前选中 + 当前查询"过滤过了；这里再对一次 detail.id，是因为 detail 比
+  // selectedId 慢一拍 —— 切会话时新会话还在读，头部显示的仍是上一个会话的信息。
+  const hits =
+    sessionHits !== null && sessionHits.sessionId === detail.id ? sessionHits : null
 
   const path = settings.showFullPaths ? detail.sourceFile : detail.displaySourceFile
   const cost = detail.usage
@@ -216,6 +266,9 @@ function SessionHeader({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {hits !== null ? (
+            <HitStepper hits={hits} eventIndex={eventIndex} onSelectIndex={onSelectIndex} />
+          ) : null}
           {resume.ok ? (
             <Button
               icon={Terminal}
@@ -306,6 +359,95 @@ function SessionHeader({
         </div>
       ) : null}
     </header>
+  )
+}
+
+/**
+ * 头部那个紧凑的命中步进器：`命中 N 处 ‹ ›`。
+ *
+ * 命中 0 处时给一句话，而不是一个禁用的按钮 —— 与上面「复制命令」那处同一个理由：
+ * 禁用态带 `pointer-events-none`，鼠标悬不上去，`title` 里的原因就永远看不到。
+ * 而这两句话恰恰是这一期最需要说出口的：第一层列出来了、第二层找不到，得说清为什么。
+ */
+function HitStepper({
+  hits,
+  eventIndex,
+  onSelectIndex
+}: {
+  hits: SessionHits
+  eventIndex: number
+  onSelectIndex: (index: number) => void
+}): React.JSX.Element {
+  const total = hits.hits.length
+
+  if (total === 0) {
+    /*
+     * 第一层给了候选、第二层却找不到，是真的会发生的（Task 7 那条一致性测试盯的是
+     * 字段范围，不是这个），所以不能写"命中 0 处"了事 —— 那读起来像程序坏了。
+     */
+    return hits.candidate ? (
+      <span
+        className="max-w-[15rem] text-right text-[11.5px] leading-snug text-ink-faint"
+        title={
+          '两种情况会这样：索引把中文按两字一组切开，「离线」和「自检」各自出现过就够让这个会话进候选；' +
+          '或者命中的那一段正好是被换成 ~ 的用户目录 —— 索引里有，界面上没有。'
+        }
+      >
+        这个会话里没找到完整匹配（索引按两字一组检索，可能多给了候选）
+      </span>
+    ) : (
+      <span
+        className="max-w-[15rem] text-right text-[11.5px] leading-snug text-ink-faint"
+        title="它出现在列表里是因为标题、项目名或文件名匹配上了，也可能是搜索之前就打开着的。"
+      >
+        这个会话的正文里没有这个词
+      </span>
+    )
+  }
+
+  // 光标正停在第几处命中上；不在任何命中上时是 -1。
+  const position = hits.hits.findIndex((hit) => hit.eventIndex === eventIndex)
+  const count = `${total}${hits.capped ? '+' : ''}`
+
+  const step = (delta: number): void => {
+    // 不在命中上时：「下一处」从第一处开始，「上一处」从最后一处开始。
+    const from = position !== -1 ? position : delta > 0 ? -1 : 0
+    const target = hits.hits[(from + delta + total) % total]
+    if (target !== undefined) onSelectIndex(target.eventIndex)
+  }
+
+  return (
+    <div
+      className="flex shrink-0 items-center gap-0.5 rounded-lg border border-line bg-raised px-1 py-0.5"
+      title={
+        `‹ › 在这 ${total} 处命中之间循环，顺序就是时间线的顺序。` +
+        (hits.capped
+          ? `\n已经到了每个会话 ${SEARCH_MAX_HITS_PER_SESSION} 处的上限，实际还有更多。`
+          : '')
+      }
+    >
+      <span className="px-1 text-[11.5px] whitespace-nowrap text-ink-soft tabular-nums">
+        命中 {count} 处{position !== -1 ? ` · 第 ${position + 1} 处` : ''}
+      </span>
+      <button
+        type="button"
+        onClick={() => step(-1)}
+        title="上一处命中"
+        aria-label="上一处命中"
+        className="rounded p-0.5 text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+      >
+        <ChevronLeft size={14} />
+      </button>
+      <button
+        type="button"
+        onClick={() => step(1)}
+        title="下一处命中"
+        aria-label="下一处命中"
+        className="rounded p-0.5 text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
+      >
+        <ChevronRight size={14} />
+      </button>
+    </div>
   )
 }
 

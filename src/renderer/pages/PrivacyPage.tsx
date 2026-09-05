@@ -47,8 +47,14 @@ export function PrivacyPage(): React.JSX.Element {
         <Card className="mt-3">
           <h2 className="text-[13.5px] font-semibold text-ink">本应用在你电脑上写了什么</h2>
           <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-soft">
-            只有两类文件：一份会话索引（只包含摘要，比如标题、时间、命令数量）和你的设置。
-            事件正文不会被复制出来 —— 每次打开会话时都是重新读取你的原始文件。
+            三类文件：一份会话索引（只包含摘要，比如标题、时间、命令数量）、一份全文搜索用的倒排表
+            （开着「建立全文搜索索引」时才有），以及你的设置。
+          </p>
+          <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-soft">
+            倒排表里只有"哪个词出现在哪些会话里"，没有词的顺序、上下文和原句，
+            <strong className="text-ink"> 拼不回任何一段正文</strong>
+            ；它也只建在打码之后的文本上。搜索时命中落在哪一步，是点开会话时重新读一遍你的原始文件
+            算出来的 —— 事件正文本身始终没有被复制出来。
           </p>
           {notice?.storageLocation ? (
             <div className="mt-3 flex items-center gap-2">

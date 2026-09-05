@@ -9,8 +9,10 @@ import type {
   ImportResult,
   Platform,
   ScanRequest,
-  ScanResult
+  ScanResult,
+  SearchResponse
 } from '@shared/types'
+import { normalizeSearchRequest } from '@shared/validators'
 import type { SessionLibrary } from './library'
 import { revealInFolder } from './security'
 
@@ -120,6 +122,13 @@ export function registerIpcHandlers(context: IpcContext): void {
   })
 
   ipcMain.handle(IPC.sessionsLoadSample, () => library.loadSampleData())
+
+  // 归一化之后再递进去：查询串来自渲染进程，`limit` 可能是字符串、`sessionId`
+  // 可能是空串。第一层的预算是"674 个会话 < 200 ms"，多接一个没截断的长查询就
+  // 是白花时间。
+  ipcMain.handle(IPC.sessionsSearch, (_event, request: unknown): Promise<SearchResponse> =>
+    library.searchSessions(normalizeSearchRequest(request))
+  )
 
   ipcMain.handle(IPC.statsGet, () => library.getStats())
 

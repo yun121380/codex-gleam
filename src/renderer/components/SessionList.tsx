@@ -13,9 +13,10 @@ import {
   Users,
   X
 } from 'lucide-react'
-import type { SessionSummary } from '@shared/types'
+import type { SearchResponse, SessionSummary } from '@shared/types'
 import { cx, formatDuration, formatListTime, truncateMiddle } from '../lib/format'
 import { describeAgent, foldSubAgents } from '../lib/sessionGroups'
+import { describeSearch } from '../lib/searchNotice'
 import { Badge, EmptyState, IconButton } from './ui'
 
 type SortMode = 'recent' | 'project' | 'events'
@@ -43,6 +44,7 @@ const CONFIDENCE_STYLE: Record<SessionSummary['confidence'], string> = {
   low: 'bg-neutral-soft text-ink-faint'
 }
 
+/** 只看标题 / 项目 / 文件名的本地匹配。**即时**，不等 IPC。 */
 function matches(session: SessionSummary, keyword: string): boolean {
   if (keyword === '') return true
   const needle = keyword.toLowerCase()
@@ -75,7 +77,10 @@ export function SessionList({
   onRescan,
   onImport,
   onPickFolder,
-  showFullPaths
+  showFullPaths,
+  searchQuery,
+  searchResult,
+  onSearchQueryChange
 }: {
   sessions: SessionSummary[]
   selectedId: string | null
@@ -85,8 +90,13 @@ export function SessionList({
   onImport: () => void
   onPickFolder: () => void
   showFullPaths: boolean
+  /** 搜索框原文。放在外面是因为全文查询要用它，命中步进器也要用它。 */
+  searchQuery: string
+  /** 最近一次全文查询的结果，`null` = 没搜过 / 还没到发请求的长度。 */
+  searchResult: SearchResponse | null
+  onSearchQueryChange: (query: string) => void
 }): React.JSX.Element {
-  const [keyword, setKeyword] = useState('')
+  const keyword = searchQuery
   const [sort, setSort] = useState<SortMode>('recent')
   const [filter, setFilter] = useState<FilterMode>('all')
   const [groupByProject, setGroupByProject] = useState(false)
@@ -97,9 +107,26 @@ export function SessionList({
    */
   const [pagination, setPagination] = useState({ key: '', count: PAGE_SIZE })
 
+  /**
+   * 全文命中的会话 id。
+   *
+   * 不校验 `searchResult.query === keyword`：防抖那 200 ms 里手上这份结果对应的是
+   * 更短的前缀，而更短的前缀命中的是**超集**——留着它只会多显示几个会话，而丢掉它
+   * 会让列表空一下再填回来，那是 Step 1 明令禁止的。
+   */
+  const fullTextIds = useMemo(
+    () => (searchResult === null ? null : new Set(searchResult.sessionIds)),
+    [searchResult]
+  )
+
   const visible = useMemo(() => {
+    const trimmed = keyword.trim()
     const filtered = sessions.filter(
-      (session) => matches(session, keyword.trim()) && passesFilter(session, filter)
+      (session) =>
+        // 全文命中的会话很可能标题、项目、文件名一个都不含这个词。
+        (matches(session, trimmed) || fullTextIds?.has(session.id) === true) &&
+        // 筛选条按钮是用户明确的选择，全文命中不能把它顶掉。
+        passesFilter(session, filter)
     )
     const sorted = [...filtered]
     sorted.sort((a, b) => {
@@ -111,13 +138,16 @@ export function SessionList({
       return recencyOf(b) - recencyOf(a)
     })
     return sorted
-  }, [sessions, keyword, filter, sort])
+  }, [sessions, keyword, fullTextIds, filter, sort])
 
   /**
    * 并行子代理折叠到派出它们的会话下面 —— 一百多行标题相同的条目会挤爆列表。
    * 分页与"按项目分组"都在折叠之后进行，所以一屏的条数指的是顶层会话数。
    */
   const folded = useMemo(() => foldSubAgents(visible), [visible])
+
+  /** 搜索框底下那一行。措辞全在 `describeSearch` 里，这里只负责显示。 */
+  const searchNotice = useMemo(() => describeSearch(searchResult), [searchResult])
 
   const paginationKey = `${keyword}|${filter}|${sort}|${groupByProject}|${sessions.length}`
   const shownCount = pagination.key === paginationKey ? pagination.count : PAGE_SIZE
@@ -179,14 +209,14 @@ export function SessionList({
           />
           <input
             value={keyword}
-            onChange={(event) => setKeyword(event.target.value)}
-            placeholder="搜索标题、项目或文件名"
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            placeholder="搜索标题、项目或会话内容"
             className="h-8 w-full rounded-lg border border-line bg-canvas pr-7 pl-8 text-[13px] text-ink outline-none placeholder:text-ink-faint focus:border-accent/60"
           />
           {keyword !== '' ? (
             <button
               type="button"
-              onClick={() => setKeyword('')}
+              onClick={() => onSearchQueryChange('')}
               title="清除搜索"
               className="absolute top-1/2 right-2 -translate-y-1/2 text-ink-faint hover:text-ink"
             >
@@ -194,6 +224,14 @@ export function SessionList({
             </button>
           ) : null}
         </div>
+
+        {/*
+          这次搜了什么，说清楚。省掉这一行，用户就会把"降级只搜了标题"当成
+          "库里真的没有这个词"——那两种情况下该做的事完全不同。
+        */}
+        {searchNotice !== null ? (
+          <div className="mt-1.5 text-[11px] leading-snug text-ink-faint">{searchNotice}</div>
+        ) : null}
 
         <div className="mt-2 flex flex-wrap items-center gap-1">
           {(Object.keys(FILTER_LABELS) as FilterMode[]).map((mode) => (

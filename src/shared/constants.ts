@@ -442,6 +442,23 @@ export const SEARCH_SNIPPET_LENGTH = 160
 /** 一个会话里最多返回多少处命中。命中几百处时步进器已经没有意义了。 */
 export const SEARCH_MAX_HITS_PER_SESSION = 200
 
+/**
+ * 输入停下多久才发一次全文查询。
+ *
+ * 列表的本地过滤是**即时**的，这个延迟只压住 IPC 那一次往返 —— 打字的手感由本地
+ * 过滤保证，200 ms 换来的是不给每一个按键都跑一遍倒排求交集。
+ */
+export const SEARCH_DEBOUNCE_MS = 200
+
+/**
+ * ASCII 侧至少打几个字符才发全文查询。
+ *
+ * 一个字母会前缀扩展出成百上千个词条，返回几乎整个库 —— 那看着像"搜索坏了"，
+ * 而不是"这个字母确实到处都有"。中文不受这条限制：一个汉字的信息量足够，而且
+ * 单字查询走的是精确匹配，不会扩展。
+ */
+export const SEARCH_MIN_ASCII_QUERY_LENGTH = 2
+
 export const PRIVACY_POINTS: readonly string[] = [
   '所有会话文件都在你自己的电脑上读取，本应用不会上传任何内容。',
   '本应用不调用任何 AI 接口、云端服务、遥测或错误上报服务。',

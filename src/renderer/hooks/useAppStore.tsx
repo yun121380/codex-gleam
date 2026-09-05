@@ -17,12 +17,36 @@ import type {
   ScanIssue,
   ScanProgress,
   ScanResult,
+  SearchHit,
+  SearchResponse,
   SessionSummary,
   StatsOverview
 } from '@shared/types'
-import { DEFAULT_SETTINGS } from '@shared/constants'
+import {
+  DEFAULT_SETTINGS,
+  SEARCH_DEBOUNCE_MS,
+  SEARCH_MAX_HITS_PER_SESSION
+} from '@shared/constants'
+import { shouldSearchFullText } from '../lib/searchNotice'
 
 export type AppView = 'welcome' | 'scanning' | 'sessions' | 'stats' | 'settings' | 'privacy'
+
+/**
+ * 当前打开的会话里，那些命中落在哪几步上。
+ *
+ * `sessionId` 与 `query` 跟着一起存，界面才能判断"这份命中是不是这个会话、这次查询的"
+ * —— 第二层请求还在路上时，这两样用户都可能已经改掉了。
+ */
+export interface SessionHits {
+  sessionId: string
+  query: string
+  /** 事件顺序，一个事件最多一处（见 `locate.ts` 里那条约定）。 */
+  hits: SearchHit[]
+  /** 撞到了每会话命中上限，真实数量比 `hits.length` 更多。 */
+  capped: boolean
+  /** 这个会话是第一层给出的候选之一。0 命中时靠它决定该说哪句话。 */
+  candidate: boolean
+}
 
 interface AppState {
   ready: boolean
@@ -38,6 +62,16 @@ interface AppState {
   detail: CodexSession | null
   detailLoading: boolean
   notice: { tone: 'info' | 'ok' | 'warn'; text: string } | null
+  /** 搜索框里的原文。列表的本地过滤直接读它，所以它必须是同步更新的。 */
+  searchQuery: string
+  /** 最近一次全文查询的结果。`null` = 没搜过 / 查询串还太短。 */
+  searchResult: SearchResponse | null
+  /**
+   * 当前打开的会话里的命中位置。`null` = 没查过，或者手上那份已经对不上当前查询了。
+   *
+   * 读到的是过滤后的值（见 provider 末尾那段派生）；内部 state 里可能还留着一份旧的。
+   */
+  sessionHits: SessionHits | null
 }
 
 interface AppActions {
@@ -59,6 +93,10 @@ interface AppActions {
   revealInFolder: (path: string, baseDir?: string | null) => Promise<void>
   dismissNotice: () => void
   showNotice: (tone: 'info' | 'ok' | 'warn', text: string) => void
+  /**
+   * 改搜索框。查询串**立刻**进 state（本地过滤即时生效），全文查询防抖 200 ms 再发。
+   */
+  setSearchQuery: (query: string) => void
 }
 
 type AppStore = AppState & { actions: AppActions }
@@ -83,10 +121,21 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     selectedId: null,
     detail: null,
     detailLoading: false,
-    notice: null
+    notice: null,
+    searchQuery: '',
+    searchResult: null,
+    sessionHits: null
   })
 
   const noticeTimer = useRef<number | null>(null)
+  const searchTimer = useRef<number | null>(null)
+  /**
+   * 请求序号。回来的结果对不上当前序号就整份丢掉。
+   *
+   * 不做取消：第一层查询是毫秒级的，取消机制的复杂度不值得；而"打字快时结果在
+   * 几次查询之间跳"是真的会被看见的毛病。
+   */
+  const searchSeq = useRef(0)
 
   const patch = useCallback((next: Partial<AppState>) => {
     setState((current) => ({ ...current, ...next }))
@@ -99,6 +148,52 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       noticeTimer.current = window.setTimeout(() => patch({ notice: null }), 6000)
     },
     [patch]
+  )
+
+  const runSearch = useCallback(
+    async (query: string, seq: number) => {
+      try {
+        const response = await api().searchSessions({ query })
+        // 对不上号说明用户又打字了，这份结果已经是旧的。
+        if (seq !== searchSeq.current) return
+        patch({ searchResult: response })
+      } catch (error) {
+        if (seq !== searchSeq.current) return
+        // 搜索失败时**清掉**上一份结果而不是留着：留着等于拿旧查询的命中冒充新查询的。
+        patch({ searchResult: null })
+        showNotice('warn', `搜索失败：${describeError(error)}`)
+      }
+    },
+    [patch, showNotice]
+  )
+
+  const setSearchQuery = useCallback(
+    (query: string) => {
+      // 这一次 patch 是同步的，列表的本地过滤靠它保持"打一个字立刻筛"的手感。
+      patch({ searchQuery: query })
+
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current)
+      // 序号先加，再决定发不发：在飞的那次请求从此刻起就作废了，哪怕它马上回来。
+      searchSeq.current += 1
+
+      if (!shouldSearchFullText(query)) {
+        patch({ searchResult: null })
+        return
+      }
+
+      const seq = searchSeq.current
+      searchTimer.current = window.setTimeout(() => void runSearch(query, seq), SEARCH_DEBOUNCE_MS)
+    },
+    [patch, runSearch]
+  )
+
+  // 卸载时把两个计时器都停掉：它们的回调会 setState。
+  useEffect(
+    () => () => {
+      if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current)
+      if (searchTimer.current !== null) window.clearTimeout(searchTimer.current)
+    },
+    []
   )
 
   const loadDetail = useCallback(
@@ -166,6 +261,56 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
   useEffect(() => {
     document.documentElement.dataset.theme = state.settings.theme
   }, [state.settings.theme])
+
+  /**
+   * 第二层查询：点开一个会话、或者查询串变了，就把**这一个**会话解析一遍，定位命中的位置。
+   *
+   * 触发条件挂在 `searchResult` 而不是 `searchQuery` 上，图的是它两件现成的好处：它已经
+   * 防抖过（不会每敲一个字就去解析一次文件），而且它带着第一层的候选名单 —— 0 命中时要靠
+   * 那份名单决定该说哪句话。没有查询串时它是 `null`，于是"平常点开一个会话"这条路上一次
+   * 多余的解析都不会有。
+   */
+  useEffect(() => {
+    const sessionId = state.selectedId
+    const result = state.searchResult
+
+    // 没有查询串（或者会话都没选）时什么都不发。state 里可能还留着上一次的命中，
+    // 但它过不了下面那道"对得上当前查询"的新鲜度检查，界面上不会显示。
+    if (sessionId === null || result === null) return
+
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const response = await api().searchSessions({ query: result.query, sessionId })
+        if (cancelled) return
+        setState((current) =>
+          current.selectedId === sessionId
+            ? {
+                ...current,
+                sessionHits: {
+                  sessionId,
+                  query: result.query,
+                  hits: response.hits,
+                  capped: response.hits.length >= SEARCH_MAX_HITS_PER_SESSION,
+                  candidate: result.sessionIds.includes(sessionId)
+                }
+              }
+            : current
+        )
+      } catch (error) {
+        if (cancelled) return
+        setState((current) =>
+          current.selectedId === sessionId ? { ...current, sessionHits: null } : current
+        )
+        showNotice('warn', `在这个会话里定位命中失败：${describeError(error)}`)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [showNotice, state.searchResult, state.selectedId])
 
   /**
    * 扫描结束后停在扫描页展示结果（"找到 X 个会话"），由用户点击进入列表。
@@ -314,7 +459,15 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       clearIndex: async () => {
         try {
           const sessions = await api().clearIndex()
-          patch({ sessions, detail: null, selectedId: null, issues: [] })
+          // 搜索结果一起清掉：它说的"命中 N 个会话"指的是刚被清空的那些会话。
+          patch({
+            sessions,
+            detail: null,
+            selectedId: null,
+            issues: [],
+            searchQuery: '',
+            searchResult: null
+          })
           showNotice('ok', '本地索引已清空，你的原始会话文件没有任何变化。')
         } catch (error) {
           showNotice('warn', `清空索引失败：${describeError(error)}`)
@@ -325,6 +478,8 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
         try {
           const settings = await api().updateSettings(settingsPatch)
           patch({ settings })
+          // 全文索引开关一动，上一份全文结果就不再代表磁盘上的东西了。
+          if ('buildSearchIndex' in settingsPatch) patch({ searchResult: null })
           // 打码开关会影响已展示的内容，需要重新取一次。
           if ('redactSensitive' in settingsPatch) {
             const sessions = await api().listSessions()
@@ -388,12 +543,41 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
       },
 
       dismissNotice: () => patch({ notice: null }),
-      showNotice
+      showNotice,
+      setSearchQuery
     }),
-    [applyScanResult, loadDetail, patch, showNotice, startScan, state.selectedId, state.sessions]
+    [
+      applyScanResult,
+      loadDetail,
+      patch,
+      setSearchQuery,
+      showNotice,
+      startScan,
+      state.selectedId,
+      state.sessions
+    ]
   )
 
-  const value = useMemo<AppStore>(() => ({ ...state, actions }), [state, actions])
+  /**
+   * 命中只在"还对得上当前会话、当前查询"时才算数 —— 这道检查放在读的一侧做，
+   * 而不是在上面那个 effect 里同步清一次 state。
+   *
+   * 好处不只是省掉一次级联渲染：清空的写法要等 effect 跑完才生效，而这里是**当帧**生效 ——
+   * 用户清掉搜索框、或者改了查询串的那一刻，旧查询的"命中 3 处"就不再出现在头部，
+   * 不会挂着等第二层的下一趟请求回来。state 里那份残留会被下一次成功的响应盖掉。
+   */
+  const sessionHits = useMemo(() => {
+    const hits = state.sessionHits
+    if (hits === null || state.searchResult === null) return null
+    return hits.sessionId === state.selectedId && hits.query === state.searchResult.query
+      ? hits
+      : null
+  }, [state.searchResult, state.selectedId, state.sessionHits])
+
+  const value = useMemo<AppStore>(
+    () => ({ ...state, sessionHits, actions }),
+    [state, sessionHits, actions]
+  )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
