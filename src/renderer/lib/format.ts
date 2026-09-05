@@ -112,3 +112,36 @@ export function fileExtensionOf(path: string): string {
 export function baseNameOf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path
 }
+
+/** token 数在徽标上要短：一万以上换成 9.8k，免得把整行顶开。详情走 title 提示。 */
+export function formatTokens(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return '0'
+  if (value < 10_000) return formatNumber(value)
+  if (value < 1_000_000) return `${(value / 1000).toFixed(1)}k`
+  return `${(value / 1_000_000).toFixed(2)}M`
+}
+
+/**
+ * 金额。两个单价都没填就返回 null —— 界面据此决定"只显示 token 数"。
+ *
+ * 只填了一个也算：另一个按 0 计。这不是想当然，而是"填了输入价、没填输出价"时
+ * 唯一诚实的做法 —— 提示里会说明金额只算了填过的那一半。
+ */
+export function formatCost(
+  usage: { inputTokens: number; outputTokens: number },
+  pricePerMillionInput: number | null,
+  pricePerMillionOutput: number | null,
+  currency: string
+): string | null {
+  if (pricePerMillionInput === null && pricePerMillionOutput === null) return null
+
+  const cost =
+    (usage.inputTokens * (pricePerMillionInput ?? 0) +
+      usage.outputTokens * (pricePerMillionOutput ?? 0)) /
+    1_000_000
+  if (!Number.isFinite(cost) || cost < 0) return null
+
+  // 便宜到 0.01 以下就多给两位小数，否则一屏的会话全显示 0.00。
+  const digits = cost > 0 && cost < 0.01 ? 4 : 2
+  return `${currency}${cost.toFixed(digits)}`
+}

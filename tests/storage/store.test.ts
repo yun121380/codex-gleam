@@ -54,7 +54,8 @@ function summary(id: string): SessionSummary {
     warnings: [],
     indexedAt: '2026-08-30T00:00:00.000Z',
     fileModifiedAt: null,
-    agent: { threadId: null, parentThreadId: null, nickname: null, role: null, taskPath: null }
+    agent: { threadId: null, parentThreadId: null, nickname: null, role: null, taskPath: null },
+    usage: null
   }
 }
 
@@ -245,5 +246,51 @@ describe('损坏与残留', () => {
     const store = new LocalStore(dir)
     await expect(store.getSettings()).resolves.toBeTruthy()
     await expect(store.getIndex()).resolves.toEqual([])
+  })
+})
+
+/**
+ * 索引是上一次扫描留在磁盘上的，可能由更早的版本写成。
+ *
+ * 类型签名上这些字段都不可能是 undefined，但索引是从 JSON 读进来强转的，
+ * 编译器管不着 —— 只有这条测试能拦住"新增字段忘了补默认值"。
+ */
+describe('旧版本索引', () => {
+  /** 造一条旧索引：拿完整的 summary 抹掉几个字段，模拟更早的版本写下的样子。 */
+  function legacy(id: string, ...omit: string[]): Record<string, unknown> {
+    const entry = { ...summary(id) } as unknown as Record<string, unknown>
+    for (const key of omit) delete entry[key]
+    return entry
+  }
+
+  it('缺 usage 的旧索引读出来是 null，不是 undefined', async () => {
+    await writeFile(
+      join(dir, 'session-index.json'),
+      JSON.stringify([legacy('legacy', 'usage')]),
+      'utf8'
+    )
+
+    const [entry] = await new LocalStore(dir).getIndex()
+
+    expect(entry).toBeDefined()
+    expect(entry!.usage).toBeNull()
+    expect('usage' in entry!).toBe(true)
+  })
+
+  /**
+   * 逐字段补而不是"有 agent 就整条原样返回"：真实的旧索引往往缺的不止一个字段，
+   * 补齐逻辑不能因为撞上其中一个就提前收工。
+   */
+  it('agent 和 usage 一起缺时两个都补上', async () => {
+    await writeFile(
+      join(dir, 'session-index.json'),
+      JSON.stringify([legacy('older', 'agent', 'usage')]),
+      'utf8'
+    )
+
+    const [entry] = await new LocalStore(dir).getIndex()
+
+    expect(entry!.usage).toBeNull()
+    expect(entry!.agent.threadId).toBeNull()
   })
 })

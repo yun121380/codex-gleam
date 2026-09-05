@@ -5,7 +5,8 @@ import type {
   ExportOptions,
   FileChange,
   Platform,
-  TestSummary
+  TestSummary,
+  UsageSummary
 } from '@shared/types'
 import { maybeMaskSessionPaths } from '../redaction/maskPaths'
 import { redactSession } from '../redaction/redact'
@@ -86,6 +87,9 @@ export interface ReportModel {
     testsFailed: number
     errors: number
   }
+  usage: UsageSummary | null
+  /** 用量的一行人话。日志没记时是"未记录用量"，两个格式化器直接照抄，不必各自判断。 */
+  usageLine: string
   userMessages: ReportMessage[]
   assistantMessages: ReportMessage[]
   commands: ReportCommand[]
@@ -306,6 +310,8 @@ export function buildReportModel(
       testsFailed: session.testsFailed,
       errors: session.errorCount
     },
+    usage: session.usage,
+    usageLine: usageLine(session.usage),
     userMessages,
     assistantMessages,
     commands,
@@ -320,6 +326,25 @@ export function buildReportModel(
     options,
     raw: options.includeRawJson ? session.events.map((event) => event.raw) : null
   }
+}
+
+/**
+ * 用量的一行人话。
+ *
+ * 报告里**不写金额** —— 单价是本机设置，跟着产物走出去只会让读的人以为那是官方价格。
+ * 想算钱的人拿到 token 数自己乘，比拿到一个来源不明的金额可靠。
+ */
+function usageLine(usage: UsageSummary | null): string {
+  if (!usage) return '日志未记录用量'
+
+  const parts = [`${usage.totalTokens} token`]
+  // 只记了总数、没记拆分时这两个都是 0，写出来会被读成"没花钱"。
+  if (usage.inputTokens + usage.outputTokens > 0) {
+    parts.push(`输入 ${usage.inputTokens} / 输出 ${usage.outputTokens}`)
+  }
+  if (usage.cachedInputTokens !== null) parts.push(`命中缓存 ${usage.cachedInputTokens}`)
+  parts.push(usage.basis === 'cumulative' ? '按累计值取末条' : '按每轮增量求和')
+  return parts.join('，')
 }
 
 export function formatDuration(ms: number): string {

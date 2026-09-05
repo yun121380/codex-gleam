@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { formatListTime, formatRelativeTime } from '../../src/renderer/lib/format'
+import {
+  formatCost,
+  formatListTime,
+  formatRelativeTime,
+  formatTokens
+} from '../../src/renderer/lib/format'
 
 /**
  * 会话列表的时间列。
@@ -46,5 +51,65 @@ describe('列表里的时间', () => {
     expect(formatRelativeTime('2026-08-30T13:59:30+08:00', NOW)).toBe('刚刚')
     expect(formatRelativeTime('2026-08-29T14:00:00+08:00', NOW)).toBe('昨天')
     expect(formatRelativeTime('2026-08-17T14:00:00+08:00', NOW)).toBe('13 天前')
+  })
+})
+
+/** 徽标上的 token 数。宽度有限，一万以上必须缩写，否则整行会被顶开。 */
+describe('token 数的写法', () => {
+  it('一万以内写全，带千分位', () => {
+    expect(formatTokens(0)).toBe('0')
+    expect(formatTokens(640)).toBe('640')
+    expect(formatTokens(9760)).toBe('9,760')
+  })
+
+  it('一万以上缩成 k', () => {
+    expect(formatTokens(10_000)).toBe('10.0k')
+    expect(formatTokens(19_602)).toBe('19.6k')
+  })
+
+  it('百万以上缩成 M', () => {
+    expect(formatTokens(1_234_567)).toBe('1.23M')
+  })
+
+  it('负数和非数字都当 0，不把 NaN 写到界面上', () => {
+    expect(formatTokens(-1)).toBe('0')
+    expect(formatTokens(Number.NaN)).toBe('0')
+    expect(formatTokens(Number.POSITIVE_INFINITY)).toBe('0')
+  })
+})
+
+/**
+ * 金额。
+ *
+ * 这里最要紧的一条是"没填单价"与"单价填了 0"必须分开：前者返回 null，
+ * 界面上一个金额都不显示；后者是免费额度内的真实单价，得老实显示 0。
+ */
+describe('金额的写法', () => {
+  const usage = { inputTokens: 9120, outputTokens: 640 }
+
+  it('两个单价都没填就不算金额', () => {
+    expect(formatCost(usage, null, null, '$')).toBeNull()
+  })
+
+  it('填了就按每百万 token 算', () => {
+    expect(formatCost(usage, 3, 15, '$')).toBe('$0.04')
+  })
+
+  it('单价填 0 显示 0，而不是当成没填', () => {
+    expect(formatCost(usage, 0, 0, '$')).toBe('$0.00')
+  })
+
+  it('只填了一半时另一半按 0 计', () => {
+    expect(formatCost({ inputTokens: 1_000_000, outputTokens: 1_000_000 }, null, 10, '¥')).toBe(
+      '¥10.00'
+    )
+  })
+
+  it('不到一分钱时多给两位，免得一屏全是 0.00', () => {
+    expect(formatCost({ inputTokens: 1000, outputTokens: 0 }, 3, null, '$')).toBe('$0.0030')
+  })
+
+  it('没填货币符号就只给数字', () => {
+    expect(formatCost(usage, 3, 15, '')).toBe('0.04')
   })
 })

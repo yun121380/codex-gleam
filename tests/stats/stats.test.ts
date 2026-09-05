@@ -36,6 +36,7 @@ function summary(overrides: Partial<SessionSummary> = {}): SessionSummary {
     indexedAt: '2026-08-28T10:05:00.000Z',
     fileModifiedAt: '2026-08-28T10:05:00.000Z',
     agent: { threadId: null, parentThreadId: null, nickname: null, role: null, taskPath: null },
+    usage: null,
     ...overrides
   }
 }

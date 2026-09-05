@@ -20,6 +20,7 @@ import type { NormalizeContext, NormalizedResult, ParsedRecord } from './types'
 import { buildUnifiedDiff, parsePatchText } from './patch'
 import { isTestCommand, parseTestOutput } from './testOutput'
 import { durationFromText, exitCodeFromText, hasHardFailureMarker, parseToolScript } from './toolScript'
+import { UsageCollector } from './usage'
 
 /**
  * 把任意形状的记录统一成 CodexEvent。
@@ -716,6 +717,12 @@ export function normalizeRecord(record: ParsedRecord, ctx: NormalizeContext): Co
 
   const typeToken = innerType !== '' ? innerType : outerType
 
+  // 用量数字和模型名必须在噪音判定之前捞走：token_count / task_started 恰好都在
+  // 噪音名单上，等下面那个 if 把它们丢掉就没有第二次机会了。放在这里还顺带解决了
+  // 另一半问题 —— 一个调用点同时看得见被丢弃的用量记录和活下来的 turn_context
+  // （模型名写在那里）。采集器自己吞掉一切异常，这一行不会让解析失败。
+  ctx.noteUsage?.(inner)
+
   // 纯噪音整条丢弃。放在最前面：这类记录能占到全部记录的一半以上，
   // 早一步丢掉既让时间线可读，也省下大量内存。
   // 流式增量片段同理 —— 完整内容另有一条记录。
@@ -1230,11 +1237,13 @@ export function normalizeRecords(
   let dropped = 0
 
   let wasNoise: boolean
+  const usage = new UsageCollector()
   const recordCtx: NormalizeContext = {
     ...ctx,
     noteNoise: () => {
       wasNoise = true
-    }
+    },
+    noteUsage: (record) => usage.note(record)
   }
 
   for (const record of records) {
@@ -1263,7 +1272,12 @@ export function normalizeRecords(
 
   const deduped = collapseMirroredMessages(events)
   linkCommandOutputs(deduped)
-  return { events: collapseSessionStarts(deduped), skipped, dropped }
+  return {
+    events: collapseSessionStarts(deduped),
+    skipped,
+    dropped,
+    usage: usage.summary()
+  }
 }
 
 /**

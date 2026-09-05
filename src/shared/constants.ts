@@ -152,7 +152,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   playbackIntervalMs: 1200,
   hiddenSources: [],
-  hiddenSessionIds: []
+  hiddenSessionIds: [],
+  // 单价默认留空 —— 我们不知道用户用的是哪档价格，猜一个填进去只会让金额看着
+  // 像官方数字。留空时界面只显示 token 数。
+  pricePerMillionInput: null,
+  pricePerMillionOutput: null,
+  priceCurrency: ''
 }
 
 export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {

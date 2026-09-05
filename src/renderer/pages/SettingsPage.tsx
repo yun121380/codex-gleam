@@ -209,6 +209,45 @@ export function SettingsPage(): React.JSX.Element {
         </Card>
 
         <Card className="mt-3">
+          <SectionTitle hint="留空就只显示 token 数">用量单价</SectionTitle>
+          <p className="text-[12.5px] leading-relaxed text-ink-soft">
+            本应用不预置任何价格表 —— 写死的价格会过期，而过期的价格比没有价格更糟。想看金额就把你
+            自己那份单价填进来，只存在本机，也不会跟着导出的报告走出去。
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <Field label="输入 · 每百万 token">
+              <TextInput
+                type="number"
+                min={0}
+                value={settings.pricePerMillionInput ?? ''}
+                placeholder="留空"
+                onChange={(value) =>
+                  void actions.updateSettings({ pricePerMillionInput: parsePrice(value) })
+                }
+              />
+            </Field>
+            <Field label="输出 · 每百万 token">
+              <TextInput
+                type="number"
+                min={0}
+                value={settings.pricePerMillionOutput ?? ''}
+                placeholder="留空"
+                onChange={(value) =>
+                  void actions.updateSettings({ pricePerMillionOutput: parsePrice(value) })
+                }
+              />
+            </Field>
+            <Field label="货币符号">
+              <TextInput
+                value={settings.priceCurrency}
+                placeholder="例如 $ 或 ¥"
+                onChange={(value) => void actions.updateSettings({ priceCurrency: value })}
+              />
+            </Field>
+          </div>
+        </Card>
+
+        <Card className="mt-3">
           <SectionTitle>本地数据</SectionTitle>
           <p className="text-[12.5px] leading-relaxed text-ink-soft">
             本应用只保存一份"索引"（会话摘要）和这些设置。清空索引不会删除、修改或移动你的任何 Codex
@@ -239,4 +278,16 @@ export function SettingsPage(): React.JSX.Element {
       </div>
     </div>
   )
+}
+
+/**
+ * 单价输入。空串与非数字都当"没填"，而不是当 0。
+ *
+ * 0 是一个有意义的单价（免费额度内），跟"没填"必须分得开：没填时界面根本不显示
+ * 金额，填 0 时显示的是 0。
+ */
+function parsePrice(value: string): number | null {
+  if (value.trim() === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }

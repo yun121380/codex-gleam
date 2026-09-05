@@ -9,13 +9,21 @@ import {
   Sparkles,
   TriangleAlert
 } from 'lucide-react'
-import type { ExportFormat, ExportOptions } from '@shared/types'
+import type { AppSettings, ExportFormat, ExportOptions, UsageSummary } from '@shared/types'
 import { DetailPanel } from '../components/DetailPanel'
 import { ExportDialog } from '../components/ExportDialog'
 import { SessionList } from '../components/SessionList'
 import { Timeline } from '../components/Timeline'
 import { Badge, Button, EmptyState, Spinner } from '../components/ui'
-import { formatBytes, formatDateTime, formatDuration, truncateMiddle } from '../lib/format'
+import {
+  formatBytes,
+  formatCost,
+  formatDateTime,
+  formatDuration,
+  formatNumber,
+  formatTokens,
+  truncateMiddle
+} from '../lib/format'
 import { useApp } from '../hooks/useAppStore'
 
 export function SessionsPage(): React.JSX.Element {
@@ -154,6 +162,14 @@ function SessionHeader({
   if (!detail) return null
 
   const path = settings.showFullPaths ? detail.sourceFile : detail.displaySourceFile
+  const cost = detail.usage
+    ? formatCost(
+        detail.usage,
+        settings.pricePerMillionInput,
+        settings.pricePerMillionOutput,
+        settings.priceCurrency
+      )
+    : null
 
   return (
     <header className="shrink-0 border-b border-line bg-surface px-4 py-3">
@@ -214,6 +230,21 @@ function SessionHeader({
         >
           可信度 {Math.round(detail.confidenceScore * 100)}%
         </Badge>
+        {detail.usage ? (
+          <Badge
+            className="bg-neutral-soft text-ink-soft"
+            title={usageTooltip(detail.usage, settings)}
+          >
+            {formatTokens(detail.usage.totalTokens)} token{cost !== null ? ` · ${cost}` : ''}
+          </Badge>
+        ) : (
+          <Badge
+            className="bg-neutral-soft text-ink-faint"
+            title="这份日志里没有任何用量记录。显示 0 会是谎报，所以这里什么数字都不给。"
+          >
+            日志未记录用量
+          </Badge>
+        )}
       </div>
 
       {detail.warnings.length > 0 ? (
@@ -234,4 +265,50 @@ function SessionHeader({
       ) : null}
     </header>
   )
+}
+
+/**
+ * 用量详情。跟可信度徽标同一个套路：细节全塞进 title，不占版面。
+ *
+ * 每一行都只在"这条信息真的存在"时才出现 —— 日志只记了总数时，输入/输出
+ * 会是 0，那种 0 读起来像"没花钱"，不能显示。
+ */
+function usageTooltip(usage: UsageSummary, settings: AppSettings): string {
+  const lines: string[] = [`总计 ${formatNumber(usage.totalTokens)} token`]
+
+  if (usage.inputTokens + usage.outputTokens > 0) {
+    lines.push(`输入 ${formatNumber(usage.inputTokens)} · 输出 ${formatNumber(usage.outputTokens)}`)
+  }
+  if (usage.cachedInputTokens !== null) {
+    lines.push(`其中命中缓存 ${formatNumber(usage.cachedInputTokens)}`)
+  }
+
+  lines.push(
+    usage.basis === 'cumulative'
+      ? '日志记的是累计值，取了最后一条'
+      : '日志记的是每轮增量，已逐条相加'
+  )
+
+  if (usage.contextWindow !== null) {
+    const ratio = Math.round((usage.totalTokens / usage.contextWindow) * 100)
+    // 累计用量超过窗口是常态而不是异常：每一轮都会把上下文重发一遍。
+    // 这时候写"占用 480%"纯属胡说，得把原因说出来。
+    lines.push(
+      ratio <= 100
+        ? `模型上下文窗口 ${formatNumber(usage.contextWindow)}，这次用掉约 ${ratio}%`
+        : `模型上下文窗口 ${formatNumber(usage.contextWindow)}；累计用量已经超过它 —— 每轮都会重发上下文，这是正常的`
+    )
+  }
+
+  if (usage.byModel.length > 1 || (usage.byModel[0]?.model ?? 'unknown') !== 'unknown') {
+    lines.push(...usage.byModel.map((entry) => `${entry.model}：${formatNumber(entry.totalTokens)}`))
+  }
+
+  if (settings.pricePerMillionInput === null && settings.pricePerMillionOutput === null) {
+    lines.push('想看金额就在设置里填单价')
+  } else if (settings.pricePerMillionInput === null || settings.pricePerMillionOutput === null) {
+    lines.push('金额只算了你填过的那一半单价')
+  }
+
+  return lines.join('\n')
 }

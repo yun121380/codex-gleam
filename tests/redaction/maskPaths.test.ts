@@ -66,6 +66,7 @@ function session(overrides: Partial<CodexSession> = {}): CodexSession {
     indexedAt: '2026-08-30T00:00:00.000Z',
     fileModifiedAt: null,
     agent: { threadId: null, parentThreadId: null, nickname: null, role: null, taskPath: null },
+    usage: null,
     events: [event({})],
     ...overrides
   }

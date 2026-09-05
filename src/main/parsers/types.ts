@@ -1,4 +1,4 @@
-import type { CodexEvent } from '@shared/types'
+import type { CodexEvent, UsageSummary } from '@shared/types'
 import type { DetectedFormat } from '../scanner/fingerprint'
 
 /** 一条已成功 JSON.parse 的记录（JSONL 的一行，或 JSON 数组的一项）。 */
@@ -87,6 +87,12 @@ export interface NormalizeContext {
    * 前者是正常的，后者才需要在界面上提醒用户。
    */
   noteNoise?: () => void
+  /**
+   * 每条记录（含即将被当噪音丢弃的那些）都会经过这里，用来把用量数字和模型名捞走。
+   *
+   * 拿到的是剥壳之后的对象，与 normalizeRecord 自己看到的是同一份。
+   */
+  noteUsage?: (record: unknown) => void
 }
 
 export interface NormalizedResult {
@@ -95,4 +101,6 @@ export interface NormalizedResult {
   skipped: number
   /** 判定为纯噪音而主动丢弃的记录数。属于正常行为，不提示。 */
   dropped: number
+  /** 会话用量。null = 这批记录里没有任何用量数字，界面上要说"未记录"。 */
+  usage: UsageSummary | null
 }

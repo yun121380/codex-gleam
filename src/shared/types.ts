@@ -138,6 +138,27 @@ export interface ScanIssue {
   suggestion: string
 }
 
+/**
+ * 用量数字在日志里是累计的还是每轮的增量。
+ *
+ * 这不是配置项，是**从数据本身看出来的**结论：字段名（total_token_usage /
+ * last_token_usage）在不同 Codex 版本里语义相反，认名字必然认错。
+ */
+export type UsageBasis = 'cumulative' | 'delta'
+
+export interface UsageSummary {
+  inputTokens: number
+  outputTokens: number
+  cachedInputTokens: number | null
+  totalTokens: number
+  /** 记下用了哪条规则，便于排错和界面提示 */
+  basis: UsageBasis
+  /** 按模型拆分；日志里没写模型名时只有一条 'unknown' */
+  byModel: Array<{ model: string; totalTokens: number }>
+  /** task_started 里的 model_context_window，用来算上下文占用率 */
+  contextWindow: number | null
+}
+
 export interface SessionSummary {
   id: string
   title: string
@@ -181,6 +202,13 @@ export interface SessionSummary {
    * 好在 Codex 把父子关系明明白白写在 session_meta 里，不用靠标题去猜。
    */
   agent: AgentInfo
+  /**
+   * 会话用量。
+   *
+   * null 表示这份日志里一个用量数字都没有 —— 界面上要照实说"未记录"。
+   * 显示 0 会被读成"这次几乎没花钱"，那是谎报，比不报更糟。
+   */
+  usage: UsageSummary | null
 }
 
 export interface AgentInfo {
@@ -253,6 +281,16 @@ export interface AppSettings {
   hiddenSources: string[]
   /** 被移除的单个会话 id（同一文件里的其他会话不受影响）。 */
   hiddenSessionIds: string[]
+  /**
+   * 每百万输入 token 的单价。null = 没填，界面只显示 token 数不显示金额。
+   *
+   * 本应用不预置价格表：写死的价格会过期，而过期的价格比没有价格更糟。
+   */
+  pricePerMillionInput: number | null
+  /** 每百万输出 token 的单价。 */
+  pricePerMillionOutput: number | null
+  /** 单价的货币符号，纯显示用。空字符串就不写单位。 */
+  priceCurrency: string
 }
 
 export interface ExportOptions {

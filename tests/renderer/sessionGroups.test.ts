@@ -44,6 +44,7 @@ function session(
     indexedAt: '2026-08-09T07:10:00.000Z',
     fileModifiedAt: '2026-08-09T07:10:00.000Z',
     agent: { threadId: null, parentThreadId: null, nickname: null, role: null, taskPath: null, ...agent },
+    usage: null,
     ...overrides
   }
 }

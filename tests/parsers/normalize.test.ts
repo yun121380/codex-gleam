@@ -349,4 +349,34 @@ describe('不完整与异常记录', () => {
     expect(event).toHaveProperty('success')
     expect(event).toHaveProperty('raw')
   })
+
+  it('噪音记录被丢弃，但它带的用量数字先被捞走了', () => {
+    const records: ParsedRecord[] = [
+      {
+        value: {
+          type: 'event_msg',
+          ordinal: 1,
+          payload: {
+            type: 'token_count',
+            info: {
+              total_token_usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 }
+            }
+          }
+        },
+        line: 1
+      }
+    ]
+
+    const result = normalizeRecords(records, context())
+
+    expect(result.events).toHaveLength(0)
+    expect(result.dropped).toBe(1)
+    expect(result.usage?.totalTokens).toBe(12)
+  })
+
+  it('一条用量记录都没有时 usage 是 null', () => {
+    const records: ParsedRecord[] = [{ value: { role: 'user', content: '你好' }, line: 1 }]
+
+    expect(normalizeRecords(records, context()).usage).toBeNull()
+  })
 })

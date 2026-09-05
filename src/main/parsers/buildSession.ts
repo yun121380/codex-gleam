@@ -155,7 +155,7 @@ export function buildSession(args: BuildSessionArgs): CodexSession | null {
 
   let counter = 0
   // dropped（主动丢弃的噪音）刻意不产生警告：那是正常的过滤，不是解析失败。
-  const { events, skipped } = normalizeRecords(draft.records, {
+  const { events, skipped, usage } = normalizeRecords(draft.records, {
     filePath,
     parserId,
     workingDirectory: draft.meta.workingDirectory ?? null,
@@ -312,6 +312,7 @@ export function buildSession(args: BuildSessionArgs): CodexSession | null {
       role: draft.meta.agent?.role ?? null,
       taskPath: draft.meta.agent?.taskPath ?? null
     },
+    usage,
     events
   }
 }

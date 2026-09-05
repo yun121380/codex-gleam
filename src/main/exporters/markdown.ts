@@ -58,6 +58,7 @@ export function exportMarkdown(report: ReportModel): string {
   lines.push(`| 测试通过 | ${counts.testsPassed} |`)
   lines.push(`| 测试失败 | ${counts.testsFailed} |`)
   lines.push(`| 错误记录 | ${counts.errors} |`)
+  lines.push(`| 用量 | ${escapeCell(report.usageLine)} |`)
   lines.push('')
 
   lines.push('## 三、你提出的需求')

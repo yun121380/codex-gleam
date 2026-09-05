@@ -125,6 +125,8 @@ blockquote {
 .card .k { font-size: 12px; color: var(--ink-soft); }
 .card .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .card.warn .v { color: var(--fail); }
+/* 用量是一句话而不是一个数字，塞进 22px 的卡片里会撑破版面，所以单独一行。 */
+.usage { margin: 2px 0 8px; font-size: 13px; color: var(--ink-soft); }
 .badge {
   display: inline-block;
   padding: 1px 9px;
@@ -195,7 +197,8 @@ export function exportHtml(report: ReportModel): string {
               card.k
             )}</div><div class="v">${card.v}</div></div>`
         )
-        .join('')}</div>`
+        .join('')}</div>
+<p class="usage">用量：${escapeHtml(report.usageLine)}</p>`
     )
   )
 

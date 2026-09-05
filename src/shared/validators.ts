@@ -159,8 +159,21 @@ export function normalizeSettings(input: unknown): AppSettings {
       clampNumber(input.playbackIntervalMs, 200, 10_000, DEFAULT_SETTINGS.playbackIntervalMs)
     ),
     hiddenSources: asStringArray(input.hiddenSources),
-    hiddenSessionIds: asStringArray(input.hiddenSessionIds)
+    hiddenSessionIds: asStringArray(input.hiddenSessionIds),
+    pricePerMillionInput: asPrice(input.pricePerMillionInput),
+    pricePerMillionOutput: asPrice(input.pricePerMillionOutput),
+    priceCurrency: asString(input.priceCurrency) ?? DEFAULT_SETTINGS.priceCurrency
   }
+}
+
+/**
+ * 单价。空、非数字、负数都当"没填"。
+ *
+ * 0 不当没填 —— 免费额度内是一个真实的、有意义的单价。
+ */
+function asPrice(value: unknown): number | null {
+  const parsed = asNumber(value)
+  return parsed === null || parsed < 0 ? null : parsed
 }
 
 /** 事件内容有可能是字符串、数组或对象，这里统一压平成纯文本。 */

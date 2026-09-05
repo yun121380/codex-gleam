@@ -188,11 +188,20 @@ function isSummaryLike(value: unknown): boolean {
  *
  * 索引是上一次扫描留在磁盘上的，可能由更早的版本写成。新增字段时不补默认值，
  * 界面上一读就是 undefined。重新扫描当然会写回完整数据，但不该逼用户先扫一遍。
+ *
+ * 逐字段补，不要写成"某个字段存在就整条原样返回" —— 那样只要旧索引恰好有那一个
+ * 字段，之后新增的字段就全都留在 undefined 上，而类型签名说它们不可能是 undefined。
  */
 function withDefaults(summary: SessionSummary): SessionSummary {
-  if (summary.agent) return summary
   return {
     ...summary,
-    agent: { threadId: null, parentThreadId: null, nickname: null, role: null, taskPath: null }
+    agent: summary.agent ?? {
+      threadId: null,
+      parentThreadId: null,
+      nickname: null,
+      role: null,
+      taskPath: null
+    },
+    usage: summary.usage ?? null
   }
 }

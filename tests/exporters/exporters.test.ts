@@ -4,7 +4,7 @@ import type { CodexEvent, CodexSession, ExportOptions } from '../../src/shared/t
 import { renderExport, toSafeFileName } from '../../src/main/exporters'
 import { buildReportModel } from '../../src/main/exporters/reportModel'
 import { escapeHtml } from '../../src/main/exporters/html'
-import { fixturePath, loadFixture, testFixturePath } from '../support/fixtures'
+import { fixturePath, loadFixture, loadFixtureSession, testFixturePath } from '../support/fixtures'
 
 const NOW = new Date('2026-08-29T12:00:00.000Z')
 
@@ -404,11 +404,12 @@ describe('JSON 导出', () => {
     const parsed = JSON.parse(content) as Record<string, unknown>
 
     expect(parsed.schema).toBe('gleam.session-export')
-    expect(parsed.schemaVersion).toBe('1.0')
+    expect(parsed.schemaVersion).toBe('1.1')
     expect(parsed.offline).toBe(true)
     expect(parsed.redacted).toBe(true)
     expect(parsed).toHaveProperty('session')
     expect(parsed).toHaveProperty('counts')
+    expect(parsed).toHaveProperty('usage')
     expect(parsed).toHaveProperty('commands')
     expect(parsed).toHaveProperty('fileChanges')
     expect(parsed).toHaveProperty('tests')
@@ -428,6 +429,53 @@ describe('JSON 导出', () => {
 
     expect(content).not.toContain('sk-demo-FAKE')
     expect(content).not.toContain('demoPassw0rd')
+  })
+})
+
+describe('导出里的用量', () => {
+  /**
+   * 这个 fixture 的三条 token_count 是累计值，真值 9760，直接求和会得到 19250。
+   * 三种格式必须都写 9760 —— 报告是发出去给人看的，写错等于把假账发出去。
+   */
+  it('三种格式都写累计值算出来的真值', async () => {
+    const target = await loadFixtureSession('sample-agent-harness.jsonl')
+
+    const markdown = render(target, 'markdown').content
+    expect(markdown).toContain('| 用量 |')
+    expect(markdown).toContain('9760 token')
+    expect(markdown).toContain('按累计值取末条')
+    expect(markdown).not.toContain('19250')
+
+    const html = render(target, 'html').content
+    expect(html).toContain('class="usage"')
+    expect(html).toContain('9760 token')
+    expect(html).not.toContain('19250')
+
+    const parsed = JSON.parse(render(target, 'json').content) as {
+      usage: { totalTokens: number; basis: string; byModel: { totalTokens: number }[] } | null
+    }
+    expect(parsed.usage?.totalTokens).toBe(9760)
+    expect(parsed.usage?.basis).toBe('cumulative')
+    expect(parsed.usage?.byModel.reduce((sum, entry) => sum + entry.totalTokens, 0)).toBe(9760)
+  })
+
+  /** 日志没记用量时写 0 就是谎报，得照实说没记。JSON 里则是 null，不是一堆 0。 */
+  it('没有用量时照实写「未记录」', async () => {
+    const target = await loadFixtureSession('sample-partial-broken.jsonl')
+
+    expect(render(target, 'markdown').content).toContain('日志未记录用量')
+    expect(render(target, 'html').content).toContain('日志未记录用量')
+    expect(JSON.parse(render(target, 'json').content).usage).toBeNull()
+  })
+
+  /** 单价是本机设置，跟着产物走出去会被读成官方价格。所以报告里只有 token 数。 */
+  it('不把金额写进报告', async () => {
+    const target = await loadFixtureSession('sample-agent-harness.jsonl')
+
+    for (const format of ['markdown', 'html', 'json'] as const) {
+      const content = render(target, format).content
+      expect(content, format).not.toMatch(/[$¥€£]\s?\d/)
+    }
   })
 })
 
