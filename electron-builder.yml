@@ -83,6 +83,15 @@ mac:
         - x64
   icon: build/icon.png
   category: public.app-category.developer-tools
+  # ad-hoc 签名。不写这一行的话，electron-builder 找不到证书就干脆不签，
+  # 而它在那之前已经改写过 Info.plist、重命名过 Contents/MacOS 里的主程序 ——
+  # 包里留着的是 Electron 官方那份对不上内容的旧签名。arm64 上"签名坏了"比
+  # "没签名"更糟：系统在 exec 阶段就拒绝，用户看到的是"文件已损坏"，
+  # 右键打开也救不回来（只有 xattr -cr 能清）。
+  # ad-hoc 不需要 Apple 证书、不联网、不公证，只是让签名和内容重新自洽。
+  identity: '-'
+  # ad-hoc 配上强化运行时会因为库验证失败而起不来，electron-builder 自己就警告这一条。
+  hardenedRuntime: false
   # 产物名走 ASCII。默认会用 productName（拾光）当文件名，而 GitHub Release
   # 上传资产时会把非 ASCII 字符替换掉，SHA256SUMS.txt 里记的名字就对不上了。
   artifactName: Gleam-${version}-${arch}.${ext}
