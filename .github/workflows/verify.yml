@@ -1,0 +1,53 @@
+# 三平台自检。spec 3.4：「CI 在 windows / macos / ubuntu 上跑 pnpm verify」。
+# 这里只跑 typecheck + lint + test，不打包 —— 打包按 tag 走 release.yml。
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一个 ref 上后推的 commit 取消前一次还在跑的：省 runner，
+# 也让 PR 页上只留最新一次的结果，不用猜哪个是当前的。
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+# 自检只读代码，不需要写权限。
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    # matrix 里只放 os。GitHub 用矩阵值拼 check 名字，多一个维度就变成
+    # "verify (windows-latest, 20)"，分支保护规则里勾的名字会对不上，
+    # 所以 Node 版本写成固定值而不是矩阵的一维。
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 第三方 action 钉的是大版本 tag，不是 commit SHA —— tag 可以被作者移动，
+      # 严格来说不如 SHA 稳。想收紧就把 uses 换成 @<40 位 commit SHA>。
+      # 不写 version：pnpm/action-setup 从 package.json 的 packageManager 读，
+      # 版本号只留一处，不会和 lockfile 走散。
+      - uses: pnpm/action-setup@v4
+
+      # setup-node 的 pnpm 缓存要求 pnpm 已经在 PATH 上，所以必须排在上一步后面。
+      - uses: actions/setup-node@v4
+        with:
+          # 版本号加引号：YAML 会把 20.19 读成小数 20.19 → 再变成字符串 "20.19"
+          # 还算对，但 20.10 会掉成 "20.1"。加引号一劳永逸。
+          node-version: '20'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          # 自检用不到 Electron 本体（没有测试 import electron），
+          # 跳过它能省掉每个平台上百 MB 的下载。
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - run: pnpm verify
