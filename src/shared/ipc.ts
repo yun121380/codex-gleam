@@ -7,6 +7,7 @@ import type {
   ExportResult,
   ImportResult,
   PrivacyNotice,
+  RedactionReport,
   ScanProgress,
   ScanRequest,
   ScanResult,
@@ -38,6 +39,7 @@ export const IPC = {
 
   statsGet: 'stats:get',
   exportSession: 'export:session',
+  redactionReport: 'redaction:report',
 
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
@@ -79,6 +81,12 @@ export interface GleamApi {
 
   getStats(): Promise<StatsOverview>
   exportSession(request: ExportRequest): Promise<ExportResult>
+  /**
+   * 这一次打码的旁路报告：打掉了什么、什么判过之后没打。
+   *
+   * 报告里只有打过码的上下文，**没有原值**；会话不存在时返回 `null`，而不是一份空报告。
+   */
+  auditRedaction(sessionId: string): Promise<RedactionReport | null>
 
   getSettings(): Promise<AppSettings>
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>

@@ -225,7 +225,9 @@ export function redactSession(session: CodexSession, sink?: RedactionSink): Code
 
 - [ ] **Step 6: 三个 `return match` 的 bail-out 变成 `kept`。** 第 3、4、5 阶段各有一处「值看着不像密钥所以不动」，第 5 阶段还多一处「键名不敏感所以不动」。分别调 `valueKeptReason` / `keyKeptReason`，拿到非 `null` 才报——`null` 的意思是「这不值得解释」，不是「没有原因」。
 
-- [ ] **Step 7: `redactStringValue` 这一处要先看结果再决定报不报。** 它的 bail-out 会往下走 `redactText(value, sink)`，值可能在那里被别的规则打掉（`{"author": "sk-live-…"}` 就是这样）。所以顺序是：先跑 `redactText`，**只有结果和原值逐字节相同**、并且 `keyKeptReason(keyHint)` 说得出原因，才报 `kept`。否则面板会说「author 被判为不是密钥」，而那个值其实打掉了——这条在 Global Constraints 里。
+- [ ] **Step 7: `redactStringValue` 这一处要先看结果再决定报不报。** 它的 bail-out 会往下走 `redactText(value, sink)`，值可能在那里被别的规则打掉（`{"author": "sk-live-…"}` 就是这样）。所以顺序是：先跑 `redactText`，**只有结果和原值逐字节相同**、并且说得出原因，才报 `kept`。否则面板会说「author 被判为不是密钥」，而那个值其实打掉了——这条在 Global Constraints 里。
+
+  原因取自哪个函数还要再分一次：`keyHint` **本身敏感**时（`api_key: "str"`），拦住这个值的是值那一侧的判断，得问 `valueKeptReason(value)`；只有键名不敏感时才是 `keyKeptReason(keyHint)`。一律问键名的话，`api_key: "str"` 会因为 `keyKeptReason('api_key')` 返回 `null` 而什么都不报——面板上那处凭空消失，而它明明被判过。所以是 `isSensitiveKey(keyHint) ? valueKeptReason(value) : keyKeptReason(keyHint)`。
 
 - [ ] **Step 8: `redactDeep` 里数字与布尔那一处也报。** 键名判为敏感、值是 `0` 或 `true` 时今天原样返回（注释写着「它们是计数或开关，不是密钥」）。这正是设计文档要暴露的那类判断，报成 `'value-not-secret'`。
 
@@ -233,7 +235,9 @@ export function redactSession(session: CodexSession, sink?: RedactionSink): Code
 
 - [ ] **Step 10: `tests/redaction/sink.test.ts` 第一条——不传 sink 就逐字节相同。** 拿一段塞齐六种命中的文本，断言 `redactText(text)` 与 `redactText(text, createCollector())` 的返回值 `toBe` 相等；`redactSession` 同样对一整个 fixture 会话做 `toEqual`。这条是验收行前半句「现有测试零改动」的正面表述：46 条老测试全绿只说明「没改坏」，这条说明「加了 sink 也不改结果」。
 
-- [ ] **Step 11: 六种 rule 各自命中一次。** 一段文本里放 `sk-` 密钥、`Cookie:` 行、`Authorization: Bearer …`、`--token …`、`password: …`，加一个 `{"api_key": "…"}` 的 JSON。断言六个 rule 都在 `groups` 里出现、`totalHits` 对得上，并且**每条 `maskedContext` 都含占位符**。
+- [ ] **Step 11: 六种 rule 各自命中一次。** 一段文本里放 `sk-` 密钥、`Cookie:` 行、`Authorization: Bearer …`、`--api-key=…`、`password: …`，加一个 `{"api_key": "…"}` 的 JSON。断言六个 rule 都在 `groups` 里出现、`totalHits` 对得上，并且**每条 `maskedContext` 都含占位符**。
+
+  命令行那一行不能用 `--token …`：`--token X` 里的 `token` 会先被第 3 阶段的 `\b(Bearer|Basic|Token|ApiKey)\s+` 匹配掉，报出来的 rule 是 `auth-scheme`，第 4 阶段接手时值已经是占位符了。**值照样打掉了，不是漏打**，只是想验 `cli-flag` 就得绕开那四个词——`=` 后面不接空白，第 3 阶段的 `\s+` 就不成立。这件事写进测试注释，否则下一个人照设计文档改回 `--token ` 会看见一条莫名其妙的红灯。
 
 - [ ] **Step 12: 五种 `KeptReason` 各自出现一次。** 同一份文本里放 `author: "some plain text"`、`input_tokens: 128`、`password: str = Field(min_length=6)`、`api_key: <your-key>`、`token: true`，断言 `kept` 里五种原因齐全，键名对得上。
 
@@ -264,7 +268,22 @@ auditRedaction(sessionId: string): Promise<RedactionReport | null>
 
 **Steps:**
 
-- [ ] **Step 1: 先造 fixture，因为它定义了「审计完整」是什么意思。** `tests/fixtures/redaction-audit.jsonl` 一个会话里塞齐六种命中与五种排除：标题里放一个 `sk-` 密钥（用来验 `eventId` 为 `null` 那条）、一条 shell 事件的 `command` 里放 `--token`、一条事件正文里放 `Cookie:` 整行与 `Authorization: Bearer`、`raw` 里放 `{"api_key": "…", "author": "…", "input_tokens": 128, "token": true, "api_key_hint": "<your-key>"}`、再放一段 `password: str = Field(min_length=6)` 的源码片段。密钥本体全部是假的，但**词形要真**——形状不对就绕过了 `KNOWN_SECRET_PATTERNS`，那时测试绿得毫无意义。现有 fixture 一个字节都不动，这是新增的。
+- [ ] **Step 1: 先造 fixture，因为它定义了「审计完整」是什么意思。** `tests/fixtures/redaction-audit.jsonl` 一个会话里塞齐六种命中与五种排除。密钥本体全部是假的，但**词形要真**——形状不对就绕过了 `KNOWN_SECRET_PATTERNS`，那时测试绿得毫无意义。现有 fixture 一个字节都不动，这是新增的。逐条对应：
+
+  | 放在哪 | 内容 | 报出什么 |
+  | --- | --- | --- |
+  | 第一条用户消息（同时成为会话标题） | `sk-live-…` | `known-secret:openai`，其中标题那处的 `eventId` 是 `null` |
+  | 一条助手消息正文 | `Cookie: sid=…; theme=dark` + `Authorization: Bearer …` | `cookie-line`、`auth-scheme` |
+  | 一条 shell 事件的命令 | `--api-key=…` | `cli-flag` |
+  | 一条命令输出正文 | `input_tokens: 128`、`写入 <家目录>\projects\…\.env 用的是 password: …` | `metric-name`、`key-value`，而且这条的上下文里带着家目录，Step 3 才有东西可断言 |
+  | 一条助手消息正文 | `password: str = Field(min_length=6)` | `value-too-short` |
+  | `mcp_tool_call_begin` 的 `invocation.arguments` | `{"api_key":"…","author":"…","input_tokens":128,"token":true,"api_key_hint":"<your-key>"}` | `sensitive-key`、`name-not-matched`、`value-not-secret`、`value-is-template` |
+
+  三处会咬人的地方，写 fixture 之前先读代码才发现的：
+
+  1. **命令行那一行不能用 `--token …`。** 理由和 Task 3 Step 11 是同一条：第 3 阶段的 `\b(Bearer|Basic|Token|ApiKey)\s+` 会先吃掉 `--token X`，报出来是 `auth-scheme`，`cli-flag` 永远等不到。`=` 后面不接空白就绕开了。
+  2. **`metric-name` 必须来自文本，不能指望 `raw` 里那个数字。** `redactDeep` 对非敏感键下的数字与布尔值走的是 `if (value === null || typeof value !== 'object') return value`——**在任何 sink 调用之前就返回了**，所以 `raw` 里的 `"input_tokens": 128` 一条 `kept` 都不产生。这个原因得由某条事件正文里的 `input_tokens: 128` 来出。（敏感键下的数字与布尔另说：那条走对象分支，会报 `value-not-secret`，`token: true` 就是这么来的。）
+  3. **那个嵌套结构必须是真的对象，不能是 JSON 字符串。** `function_call.arguments` 是字符串，只会被文本扫一遍、报成 `key-value`；`sensitive-key` 只在 `redactDeep` 走到真键名时才出现。所以这一处选 `mcp_tool_call_begin`——它的 `payload.invocation.arguments` 在 `raw` 里是一个对象。（`raw` 留着的前提是 `keepRaw !== false`，`loadRaw` 正是这条路；扫描那条路不留 `raw`。）
 
 - [ ] **Step 2: `auditSession` 取的是原始会话，和 `getSession` 用同一句表达式。** `const session = this.touch(sessionId) ?? (await this.loadRaw(sessionId))`——`touch` 返回的是缓存里那份**原始**会话，`getSession` 也是这么开头的，两者的区别全在后面：`getSession` 往下走打码与路径缩写并把结果交出去，`auditSession` 往下走带 sink 的打码、**把打码结果丢掉、只交报告**。`null` 照样返回 `null`（会话被忘记了或者文件没了）。
 
@@ -281,6 +300,10 @@ auditRedaction(sessionId: string): Promise<RedactionReport | null>
 - [ ] **Step 8: 第三条——不落盘。** 审计前后各列一次存储目录，断言文件名集合与每个文件的 `mtimeMs` 都没变。报告是算出来就扔的，「哪个会话里有几个密钥」这句话不该出现在磁盘上任何地方。
 
 - [ ] **Step 9: 第四条——`null` 路径。** 一个不存在的 sessionId 返回 `null` 而不是抛异常，也不是一份 `totalHits: 0` 的空报告——空报告的意思是「这个会话很干净」，那是另一件事，面板上会显示成一句完全不同的话。
+
+- [ ] **Step 10: 第五条——Step 3 那件事得有人盯。** 「显示完整路径」关着时，断言有一条 `maskedContext` 里是 `~\projects\…\.env`，且没有一条含真实的家目录路径；打开时，断言原样保留。顺带把 Step 1 里 fixture 的另一处细节钉住：`raw` 里那份路径是 JSON 转义过的**双**反斜杠，跟单层分隔符不是同一个串——`maskHomePaths` 洗不到它，所以「一处都没有」这句断言得写成单层分隔符的那一版，否则它一开始就是红的。
+
+- [ ] **Step 11: 顺路把 fixture 自己也验一遍。** 断言六种 rule 每种 `count > 0` 且都带样例、五种 `KeptReason` 都在 `kept` 里、以及 `JSON.stringify(report)` 不含任何一个假密钥本体。前两条挡的是「fixture 悄悄漏了一种，下游断言全绿但绿得没意义」；第三条是 §4.2 那条约束在这一层的落地——Task 6 会再从另一个角度压一遍。
 
 ---
 

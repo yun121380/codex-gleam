@@ -9,6 +9,7 @@ import type {
   ImportResult,
   Platform,
   PrivacyNotice,
+  RedactionReport,
   ScanIssue,
   ScanProgress,
   ScanRequest,
@@ -21,9 +22,11 @@ import type {
   StatsOverview
 } from '@shared/types'
 import { PRIVACY_POINTS } from '@shared/constants'
+import { maskHomePaths } from '@shared/paths'
 import { renderExport, type RenderedExport } from './exporters'
 import { maybeMaskSessionPaths, maybeMaskSummaryPaths } from './redaction/maskPaths'
-import { maybeRedactSession, maybeRedactSummary } from './redaction/redact'
+import { maybeRedactSession, maybeRedactSummary, redactSession } from './redaction/redact'
+import { createCollector } from './redaction/report'
 import { buildScanRoots, isUnderDir, normalizePathKey, parentDirKey } from './scanner/paths'
 import {
   loadFilesDirectly,
@@ -230,6 +233,41 @@ export class SessionLibrary {
     if (session === null) return null
 
     return maybeMaskSessionPaths(maybeRedactSession(session, redact), hidePaths, paths)
+  }
+
+  /**
+   * 审计上面那次打码：只交「打掉了什么、什么没打」，不交任何会话内容。
+   *
+   * 取数走的是和 `getSession` 一样的路（缓存里的原始会话优先，没有就读盘），因为
+   * 报告要说的正是「刚才那份会话被怎么处理的」。**打码结果当场丢掉** —— 这条路径
+   * 唯一的产物是报告，会话本体一个字符都不往外走。
+   *
+   * 会话不存在时返回 `null`，不返回一份 `totalHits: 0` 的空报告：「这个会话没有」和
+   * 「这个会话里没有密钥」在面板上是两句完全不同的话。
+   */
+  async auditSession(sessionId: string): Promise<RedactionReport | null> {
+    const { redact, hidePaths, paths } = await this.forDisplay()
+    const session = this.touch(sessionId) ?? (await this.loadRaw(sessionId))
+    if (session === null) return null
+
+    const collector = createCollector()
+    redactSession(session, collector)
+    // `redact` 在这里是报告里的一个**字段**，不是审计的开关。开关关着的时候这份报告的
+    // 意思变成「你现在要分享的是原文，如果打开开关会打掉这些」—— 那正是最该看它的时刻。
+    const report = collector.summarize(session.id, redact)
+    if (!hidePaths) return report
+
+    return {
+      ...report,
+      groups: report.groups.map((group) => ({
+        ...group,
+        // 只洗上下文。`keyName` 是键名（`api_key`、`Cookie`），里面没有路径可洗。
+        samples: group.samples.map((sample) => ({
+          ...sample,
+          maskedContext: maskHomePaths(sample.maskedContext, paths)
+        }))
+      }))
+    }
   }
 
   cancelScan(): void {

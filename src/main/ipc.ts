@@ -132,6 +132,10 @@ export function registerIpcHandlers(context: IpcContext): void {
 
   ipcMain.handle(IPC.statsGet, () => library.getStats())
 
+  ipcMain.handle(IPC.redactionReport, (_event, sessionId: string) =>
+    library.auditSession(sessionId)
+  )
+
   ipcMain.handle(IPC.exportSession, async (_event, request: ExportRequest): Promise<ExportResult> => {
     try {
       const rendered = await library.renderExport(request)

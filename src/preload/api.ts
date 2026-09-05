@@ -41,6 +41,7 @@ export const gleamApi: GleamApi = {
 
   getStats: () => ipcRenderer.invoke(IPC.statsGet),
   exportSession: (request: ExportRequest) => ipcRenderer.invoke(IPC.exportSession, request),
+  auditRedaction: (sessionId: string) => ipcRenderer.invoke(IPC.redactionReport, sessionId),
 
   getSettings: () => ipcRenderer.invoke(IPC.settingsGet),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke(IPC.settingsUpdate, patch),
