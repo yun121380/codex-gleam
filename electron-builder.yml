@@ -42,10 +42,18 @@ win:
     - target: nsis
       arch:
         - x64
+    # 便携版：解压即用，不写注册表、不需要管理员。手工发的 v1.0.0 里就有一个
+    # Gleam-1.0.0-x64-portable.zip，自动发版不能把它丢了 —— 对一个离线工具来说，
+    # "拷到 U 盘就能看" 是真实用法。
+    - target: zip
+      arch:
+        - x64
   # 直接给 .ico，别让 electron-builder 自己从 PNG 转 —— 它内置的 WASM 转换器
   # 在部分机器上会因为分配不到内存而整个打包失败。
   icon: build/icon.ico
-  artifactName: Gleam-Setup-${version}-${arch}.${ext}
+  # 这个名字只有 zip 会用到（nsis 在下面自己覆盖），沿用手工发版时的命名，
+  # 老用户看到的文件名不变。
+  artifactName: Gleam-${version}-${arch}-portable.${ext}
   legalTrademarks: ''
 
 nsis:
@@ -60,10 +68,19 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: 拾光
   deleteAppDataOnUninstall: false
+  artifactName: Gleam-Setup-${version}-${arch}.${ext}
+  # 没有自动更新（publish: null），为增量更新准备的那套东西就是纯浪费：
+  # 一份没人会去下的 .blockmap，加上为了让分块对齐而放宽的压缩。关掉。
+  differentialPackage: false
 
 mac:
   target:
-    - dmg
+    # 两个架构都出：GitHub 的 macos runner 现在是 arm64，只写 target 的话
+    # 就只有 Apple Silicon 的包，Intel Mac 用户什么都拿不到。
+    - target: dmg
+      arch:
+        - arm64
+        - x64
   icon: build/icon.png
   category: public.app-category.developer-tools
   # 产物名走 ASCII。默认会用 productName（拾光）当文件名，而 GitHub Release
@@ -72,8 +89,13 @@ mac:
 
 linux:
   target:
-    - AppImage
+    # 只出 x86_64。桌面 Linux 的 arm64 份额极小，而在 x64 runner 上交叉打
+    # arm64 的 AppImage 是这三个平台里最容易碎的一环 —— 真有人要再说。
+    - target: AppImage
+      arch:
+        - x64
   icon: build/icon.png
   category: Development
   # 同 mac：文件名保持 ASCII，与校验清单一致。
   artifactName: Gleam-${version}-${arch}.${ext}
+
