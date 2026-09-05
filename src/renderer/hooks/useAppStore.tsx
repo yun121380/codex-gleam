@@ -14,6 +14,7 @@ import type {
   CodexSession,
   ExportRequest,
   ExportResult,
+  RedactionReport,
   ScanIssue,
   ScanProgress,
   ScanResult,
@@ -72,6 +73,15 @@ interface AppState {
    * 读到的是过滤后的值（见 provider 末尾那段派生）；内部 state 里可能还留着一份旧的。
    */
   sessionHits: SessionHits | null
+  /**
+   * 当前会话的打码报告。`null` = 没审计过，或者刚换了会话。
+   *
+   * 换会话时必须清掉。上一个会话的报告留在这儿，是这一期最容易犯的那种展示型
+   * 泄露：面板顶上写着 B 会话的标题，列出来的却是 A 会话里的东西。
+   */
+  redactionReport: RedactionReport | null
+  /** 审计在跑。审计要把原始文件重新读一遍，慢到必须让人看见它在动。 */
+  auditing: boolean
 }
 
 interface AppActions {
@@ -89,6 +99,12 @@ interface AppActions {
   refreshSessions: () => Promise<void>
   loadStats: () => Promise<StatsOverview | null>
   exportSession: (request: ExportRequest) => Promise<ExportResult>
+  /**
+   * 审计一个会话，把报告填进 `redactionReport`。
+   *
+   * 报告只进内存：不写文件，也不进导出产物。点开面板时调一次。
+   */
+  auditRedaction: (sessionId: string) => Promise<void>
   /** baseDir 用来解析相对路径（日志里的文件路径常常是相对工作目录的）。 */
   revealInFolder: (path: string, baseDir?: string | null) => Promise<void>
   dismissNotice: () => void
@@ -124,7 +140,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
     notice: null,
     searchQuery: '',
     searchResult: null,
-    sessionHits: null
+    sessionHits: null,
+    redactionReport: null,
+    auditing: false
   })
 
   const noticeTimer = useRef<number | null>(null)
@@ -198,11 +216,24 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
 
   const loadDetail = useCallback(
     async (sessionId: string | null) => {
+      // 打码报告跟着会话走。它不像 `sessionHits` 那样在读的一侧过滤新鲜度，
+      // 所以这里就得清干净 —— 面板里挂着上一个会话的密钥清单是彻底的错。
       if (sessionId === null) {
-        patch({ selectedId: null, detail: null, detailLoading: false })
+        patch({
+          selectedId: null,
+          detail: null,
+          detailLoading: false,
+          redactionReport: null,
+          auditing: false
+        })
         return
       }
-      patch({ selectedId: sessionId, detailLoading: true })
+      patch({
+        selectedId: sessionId,
+        detailLoading: true,
+        redactionReport: null,
+        auditing: false
+      })
       try {
         const detail = await api().getSession(sessionId)
         setState((current) =>
@@ -466,7 +497,9 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
             selectedId: null,
             issues: [],
             searchQuery: '',
-            searchResult: null
+            searchResult: null,
+            redactionReport: null,
+            auditing: false
           })
           showNotice('ok', '本地索引已清空，你的原始会话文件没有任何变化。')
         } catch (error) {
@@ -530,6 +563,27 @@ export function AppProvider({ children }: { children: ReactNode }): React.JSX.El
           const message = describeError(error)
           showNotice('warn', `导出失败：${message}`)
           return { ok: false, error: message }
+        }
+      },
+
+      auditRedaction: async (sessionId) => {
+        patch({ auditing: true })
+        try {
+          const report = await api().auditRedaction(sessionId)
+          // 审计要把原始文件整份重读一遍，回来时用户可能已经换了会话 —— 这份报告
+          // 说的不是他现在看着的会话，只能丢掉，不能填进去。
+          setState((current) =>
+            current.selectedId === sessionId
+              ? { ...current, redactionReport: report, auditing: false }
+              : { ...current, auditing: false }
+          )
+          // `null` 的意思是"没审计成"，不是"很干净"。这两句话在这里必须分开说。
+          if (!report) {
+            showNotice('warn', '没能审计这个会话，它的原始文件可能已被移动或删除。')
+          }
+        } catch (error) {
+          patch({ auditing: false, redactionReport: null })
+          showNotice('warn', `审计失败：${describeError(error)}`)
         }
       },
 

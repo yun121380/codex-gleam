@@ -29,6 +29,11 @@
     "src/renderer/**/*.ts",
     "src/renderer/**/*.tsx",
     "src/shared/**/*.ts",
-    "tests/renderer/**/*.ts"
+    "tests/renderer/**/*.ts",
+    // tests/renderer/redactionLabels.test.ts 直接读 patterns.ts 里那张表来对账：
+    // 往 KNOWN_SECRET_PATTERNS 里加一条却忘了配中文说明，那个测试就该红。硬写一份
+    // 名字清单在测试里的话，这件事永远不会被发现。composite 项目必须把被引用到的
+    // 文件都列出来（否则 TS6307）；patterns.ts 只依赖 @shared，进来不会破坏边界。
+    "src/main/redaction/patterns.ts"
   ]
 }

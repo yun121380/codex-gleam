@@ -313,7 +313,7 @@ auditRedaction(sessionId: string): Promise<RedactionReport | null>
 
 **Files:**
 - Create: `src/renderer/lib/redactionLabels.ts`, `src/renderer/components/RedactionReportDialog.tsx`
-- Modify: `src/renderer/hooks/useAppStore.tsx`, `src/renderer/pages/SessionsPage.tsx`
+- Modify: `src/renderer/hooks/useAppStore.tsx`, `src/renderer/pages/SessionsPage.tsx`, `tsconfig.web.json`
 - Test: `tests/renderer/redactionLabels.test.ts`
 
 **Interfaces:**
@@ -327,9 +327,9 @@ export function keptReasonLabel(reason: KeptReason): string
 
 **Steps:**
 
-- [ ] **Step 1: 中文说法集中在一个纯函数文件里。** 六种 rule 各一个名字加一句解释（`known-secret:openai` → 「已知格式的密钥」+「OpenAI 的 `sk-` 开头的那种，按它自己的格式认出来的」）；`known-secret:` 前缀后面的部分是模式名，做成「已知格式的密钥 · openai」这样拼出来，将来 `KNOWN_SECRET_PATTERNS` 加一条不用改这里。五种 `KeptReason` 各一句人话，说的是**为什么**而不是规则名：`'name-not-matched'` → 「键名里有敏感词，但不是独立的词（比如 author 里的 auth）」。
+- [ ] **Step 1: 中文说法集中在一个纯函数文件里。** 六种 rule 各一个名字加一句解释（`known-secret:openai` → 「已知格式的密钥」+「OpenAI 的 `sk-` 开头的那种，按它自己的格式认出来的」）；`known-secret:` 前缀后面的部分是模式名，做成「已知格式的密钥 · openai」这样拼出来，将来 `KNOWN_SECRET_PATTERNS` 加一条**名字**不用改这里。但**解释**拼不出来：`jwt` 和 `private-key-block` 不是同一句话能说清的东西，所以那张表里现有的十条各配一句自己的话，认不出的名字给一句把名字说出来、并承认「还没给它配说明」的兜底——含糊其辞地糊过去，等于把「有人加了规则却没配文案」这件事藏起来。五种 `KeptReason` 各一句人话，说的是**为什么**而不是规则名：`'name-not-matched'` → 「键名里有敏感词，但不是独立的词（比如 author 里的 auth）」。
 
-- [ ] **Step 2: `tests/renderer/redactionLabels.test.ts`——不许有兜底文案。** 遍历六种 rule 与五种 `KeptReason`，断言每一个都拿到非空且互不相同的说法。**关键是最后一条**：断言一个不认识的 rule 拿到的不是「未知规则」这种兜底——`ruleLabel` 应该把 `known-secret:` 之后的部分原样拼出来，而其余六个是穷举的。一个会静默兜底的标签函数会让「加了新规则但忘了配文案」这件事在界面上看不出来。
+- [ ] **Step 2: `tests/renderer/redactionLabels.test.ts`——不许有兜底文案。** 遍历六种 rule 与五种 `KeptReason`，断言每一个都拿到非空且互不相同的说法。**关键是最后一条**：断言一个不认识的 rule 拿到的不是「未知规则」这种兜底——`ruleLabel` 应该把 `known-secret:` 之后的部分原样拼出来，而其余六个是穷举的。一个会静默兜底的标签函数会让「加了新规则但忘了配文案」这件事在界面上看不出来。而这份测试要**直接 import `KNOWN_SECRET_PATTERNS`**、拿真表逐条对账：在测试里硬抄一份名字清单，那「加了一条却忘了配说明」就永远不会被发现，这条测试也就白写了。代价是一行 tsconfig——`tests/renderer/**` 是跟着渲染进程那份配置一起类型检查的（主进程那份明确排除了它），而渲染进程那份不含 `src/main`，composite 项目又要求被引用到的文件必须列出来，于是得把 `src/main/redaction/patterns.ts` 加进 `tsconfig.web.json` 的 `include`。`patterns.ts` 只依赖 `@shared`，进来不破坏两侧的边界。
 
 - [ ] **Step 3: 面板分两段，中间那段留白给 B2。** 上半段「打掉了什么」：按 `groups` 一组一块，标题是 `ruleLabel` + 计数，下面是最多 5 条 `maskedContext`；`samples.length < count` 时在这一组末尾补一句「另有 N 处未列出」——截断了必须说出来，这在 Global Constraints 里。下半段「什么被判为不是密钥」：`kept` 一行一条，键名 + `keptReasonLabel` + 计数；`keptTruncated` 为真时同样补一句。两段之间不放任何占位块——B2 的残留排序进来时它自己会占一段，现在留个空框只是在承诺一件还没做的事。
 
@@ -337,13 +337,13 @@ export function keptReasonLabel(reason: KeptReason): string
 
 - [ ] **Step 5: `totalHits === 0` 是一句独立的话，不是一个空列表。** 「这个会话里没有认出任何密钥。」紧接一句诚实的限定：「这不等于它一定干净——认得出的只有已知格式和敏感键名这两类。」下半段照常显示（`kept` 往往非空，而且那正是「为什么一个都没打」的答案）。
 
-- [ ] **Step 6: 样例可以点，点了跳到那一步。** `eventId` 非 `null` 时整条做成按钮，`onClick` 拿 `eventId` 去 `detail.events` 里 `findIndex`，然后调 `SessionHeader` 已有的 `onSelectIndex`，并关掉面板（跳过去了还挡着看不见）。`eventId` 为 `null`（会话标题、摘要里的告警）时不做成按钮——一个点了没反应的按钮比不做成按钮更差。找不到那条事件时也不做成按钮：会话可能已经被重新解析过了。
+- [ ] **Step 6: 样例可以点，点了跳到那一步。** 定位这件事留在 `SessionsPage`（`detail` 在那儿）：一个 `locateEvent(eventId) => number | null`，里面就是 `detail.events` 上的 `findIndex`，找不到给 `null`。对话框只拿到 `locateEvent` / `onJump` / `onClose` 三个回调——打成一个 `JumpProps` 一路往下传，省得三层组件各抄一遍参数，也让对话框始终碰不到 `detail`。`eventId` 非 `null` 且定位得到时整条做成按钮，点了跳过去并关掉面板（跳过去了还挡着看不见）。`eventId` 为 `null`（会话标题、摘要里的告警）时不做成按钮——一个点了没反应的按钮比不做成按钮更差。找不到那条事件时也不做成按钮：会话可能已经被重新解析过了。
 
 - [ ] **Step 7: 对话框骨架照 `ExportDialog.tsx` 抄。** 同一层遮罩、同一个 `role="dialog" aria-modal="true"`、同一个 Escape 关闭的 effect、同样的 `if (!open) return null`、同样的 `max-h-[60vh] overflow-y-auto` 正文。两个对话框长得不一样会让人以为它们的行为规则也不一样。
 
-- [ ] **Step 8: store 里两个状态一个 action。** `redactionReport: RedactionReport | null` 与 `auditing: boolean`，action `auditRedaction(sessionId)` 调 `window.gleam.auditRedaction` 填进去。切换会话时清掉——上一个会话的报告留在那儿，是这一期最容易犯的展示型泄露（内容都是打过码的，但「几处命中」这个数字张冠李戴了）。
+- [ ] **Step 8: store 里两个状态一个 action。** `redactionReport: RedactionReport | null` 与 `auditing: boolean`，action `auditRedaction(sessionId)` 调 `window.gleam.auditRedaction` 填进去。切换会话时清掉——上一个会话的报告留在那儿，是这一期最容易犯的展示型泄露（内容都是打过码的，但「几处命中」这个数字张冠李戴了）。每次点开都重新审计，不复用手上那份：这个面板全部的用处就是回答「**现在**分享会打掉什么」，而磁盘上那份文件、以及打码开关，都可能在两次打开之间变过。审计要把原始文件整份重读一遍，回来时用户可能已经换了会话——填进去之前对一次 `selectedId`，对不上就整份丢掉。
 
-- [ ] **Step 9: 盾牌按钮。** `SessionHeader` 右侧那一簇里，`导出报告` 的**左边**加一个 `<Button icon={Shield}>` （`variant` 用默认的次要样式，不跟导出抢主按钮的位置），文案「打码报告」，`onClick` 里先 `auditRedaction` 再开面板。`auditing` 时按钮 `busy`。`detail` 为空时和导出按钮一样不显示。
+- [ ] **Step 9: 盾牌按钮。** `SessionHeader` 右侧那一簇里，`导出报告` 的**左边**加一个 `<Button icon={Shield}>` （`variant` 用默认的次要样式，不跟导出抢主按钮的位置），文案「打码报告」。`onClick` 里**先开面板，再去审计**——反过来的话点下去界面上什么都不动，要等审计回来才弹出来；先开面板则第一帧就有转圈可看。按钮上用 `loading={auditing}`（`ui.tsx` 里 `loading` 会把图标换成转圈并顺手禁用）。`auditing` 不当 prop 传进来，`SessionHeader` 自己从 store 读：这个文件既有的分工就是「回调走 prop，状态走 `useApp()`」。`detail` 为空时整个头部都不渲染，两个按钮一起消失。
 
 ---
 

@@ -8,6 +8,7 @@ import {
   FolderSearch,
   Import,
   Play,
+  Shield,
   Sparkles,
   Terminal,
   TriangleAlert
@@ -16,6 +17,7 @@ import type { AppSettings, ExportFormat, ExportOptions, UsageSummary } from '@sh
 import { SEARCH_MAX_HITS_PER_SESSION } from '@shared/constants'
 import { DetailPanel } from '../components/DetailPanel'
 import { ExportDialog } from '../components/ExportDialog'
+import { RedactionReportDialog } from '../components/RedactionReportDialog'
 import { SessionList } from '../components/SessionList'
 import { Timeline } from '../components/Timeline'
 import { Badge, Button, EmptyState, Spinner } from '../components/ui'
@@ -42,10 +44,13 @@ export function SessionsPage(): React.JSX.Element {
     searchQuery,
     searchResult,
     sessionHits,
+    redactionReport,
+    auditing,
     actions
   } = useApp()
   const [exportOpen, setExportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
 
   /**
    * 当前看到第几步。游标记住它属于哪个会话，
@@ -91,6 +96,27 @@ export function SessionsPage(): React.JSX.Element {
     setExporting(false)
     if (result.ok || result.cancelled) setExportOpen(false)
   }
+
+  /**
+   * 点盾牌：先开面板（里面转圈），再去审计。
+   *
+   * 每次都重新审计，不复用上一次的结果 —— 这个面板全部的用处就是回答"**现在**分享
+   * 会打掉什么"，而磁盘上那份文件、以及打码开关，都可能在两次打开之间变过。
+   */
+  const onAudit = (): void => {
+    if (!selectedId) return
+    setReportOpen(true)
+    void actions.auditRedaction(selectedId)
+  }
+
+  /** 报告里的 `eventId` 落在时间线第几步。那条事件已经不在了就给 `null`。 */
+  const locateEvent = useCallback(
+    (eventId: string): number | null => {
+      const at = detail?.events.findIndex((event) => event.id === eventId) ?? -1
+      return at === -1 ? null : at
+    },
+    [detail]
+  )
 
   if (sessions.length === 0) {
     return (
@@ -141,6 +167,7 @@ export function SessionsPage(): React.JSX.Element {
         {detail ? (
           <SessionHeader
             onExport={() => setExportOpen(true)}
+            onAudit={onAudit}
             onReveal={() => void actions.revealInFolder(detail.sourceFile)}
             eventIndex={eventIndex}
             onSelectIndex={setEventIndex}
@@ -189,23 +216,35 @@ export function SessionsPage(): React.JSX.Element {
         onClose={() => setExportOpen(false)}
         onConfirm={(format, options) => void onExport(format, options)}
       />
+
+      <RedactionReportDialog
+        open={reportOpen}
+        busy={auditing}
+        sessionTitle={detail?.title ?? ''}
+        report={redactionReport}
+        locateEvent={locateEvent}
+        onJump={setEventIndex}
+        onClose={() => setReportOpen(false)}
+      />
     </div>
   )
 }
 
 function SessionHeader({
   onExport,
+  onAudit,
   onReveal,
   eventIndex,
   onSelectIndex
 }: {
   onExport: () => void
+  onAudit: () => void
   onReveal: () => void
   /** 当前停在第几步。步进器要靠它算出"现在是第几处命中"。 */
   eventIndex: number
   onSelectIndex: (index: number) => void
 }): React.JSX.Element | null {
-  const { detail, settings, bootstrap, sessionHits } = useApp()
+  const { detail, settings, bootstrap, sessionHits, auditing } = useApp()
   const [copied, setCopied] = useState(false)
 
   // 复制反馈 1500 ms 后自己消失，与 DetailPanel 里的命令块同一套。
@@ -289,6 +328,18 @@ function SessionHeader({
               {resume.reason}
             </span>
           )}
+          {/*
+           * 紧挨着导出按钮，因为这两件事是同一个动作的两面：一个把会话交出去，
+           * 一个说清交出去之前拿掉了什么。要顺手点一下，位置就得在这儿。
+           */}
+          <Button
+            icon={Shield}
+            loading={auditing}
+            title="看看这个会话分享出去时，哪些地方会被打掉"
+            onClick={onAudit}
+          >
+            打码报告
+          </Button>
           <Button variant="primary" icon={Download} onClick={onExport}>
             导出报告
           </Button>
