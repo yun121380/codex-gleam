@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   CircleAlert,
   Download,
@@ -7,6 +7,7 @@ import {
   Import,
   Play,
   Sparkles,
+  Terminal,
   TriangleAlert
 } from 'lucide-react'
 import type { AppSettings, ExportFormat, ExportOptions, UsageSummary } from '@shared/types'
@@ -24,6 +25,7 @@ import {
   formatTokens,
   truncateMiddle
 } from '../lib/format'
+import { buildResumeCommand } from '../lib/resumeCommand'
 import { useApp } from '../hooks/useAppStore'
 
 export function SessionsPage(): React.JSX.Element {
@@ -158,7 +160,16 @@ function SessionHeader({
   onExport: () => void
   onReveal: () => void
 }): React.JSX.Element | null {
-  const { detail, settings } = useApp()
+  const { detail, settings, bootstrap } = useApp()
+  const [copied, setCopied] = useState(false)
+
+  // 复制反馈 1500 ms 后自己消失，与 DetailPanel 里的命令块同一套。
+  useEffect(() => {
+    if (!copied) return
+    const timer = window.setTimeout(() => setCopied(false), 1500)
+    return () => window.clearTimeout(timer)
+  }, [copied])
+
   if (!detail) return null
 
   const path = settings.showFullPaths ? detail.sourceFile : detail.displaySourceFile
@@ -170,6 +181,15 @@ function SessionHeader({
         settings.priceCurrency
       )
     : null
+
+  const resume = buildResumeCommand({
+    template: settings.resumeTemplate,
+    platform: bootstrap?.platform ?? 'win32',
+    // 真实路径，不是 displaySourceFile 那种缩写过的 —— `~\x` 这种路径 cd 不过去。
+    // 复制是纯本机动作，showFullPaths 管的是导出产物与界面文本。
+    dir: detail.projectPath,
+    threadId: detail.agent.threadId
+  })
 
   return (
     <header className="shrink-0 border-b border-line bg-surface px-4 py-3">
@@ -195,9 +215,31 @@ function SessionHeader({
           </button>
         </div>
 
-        <Button variant="primary" icon={Download} onClick={onExport}>
-          导出报告
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {resume.ok ? (
+            <Button
+              icon={Terminal}
+              title={`复制到剪贴板（不会执行）：\n${resume.command}`}
+              onClick={() => {
+                void navigator.clipboard.writeText(resume.command).then(() => setCopied(true))
+              }}
+            >
+              {copied ? '已复制' : '复制命令'}
+            </Button>
+          ) : (
+            /*
+             * 拼不出来时用一句话而不是禁用按钮：ui.tsx 给禁用态加了
+             * pointer-events-none，鼠标悬不上去，title 里的原因就永远看不到。
+             * 一个说不出原因的灰按钮比一句话更差。
+             */
+            <span className="max-w-[13rem] text-right text-[11.5px] text-ink-faint" title={resume.detail}>
+              {resume.reason}
+            </span>
+          )}
+          <Button variant="primary" icon={Download} onClick={onExport}>
+            导出报告
+          </Button>
+        </div>
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">

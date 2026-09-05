@@ -291,6 +291,14 @@ export interface AppSettings {
   pricePerMillionOutput: number | null
   /** 单价的货币符号，纯显示用。空字符串就不写单位。 */
   priceCurrency: string
+  /**
+   * resume 命令模板，占位符 `{dir}` 与 `{threadId}` 从会话里填。
+   *
+   * 空字符串 = 跟随平台默认（见 `renderer/lib/resumeCommand.ts`）。默认值依赖平台，
+   * 而 `DEFAULT_SETTINGS` 是个拿不到平台的静态对象，所以这里存"空"，
+   * 真正的默认值在知道平台的地方解析。
+   */
+  resumeTemplate: string
 }
 
 export interface ExportOptions {

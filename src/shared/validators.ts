@@ -162,7 +162,9 @@ export function normalizeSettings(input: unknown): AppSettings {
     hiddenSessionIds: asStringArray(input.hiddenSessionIds),
     pricePerMillionInput: asPrice(input.pricePerMillionInput),
     pricePerMillionOutput: asPrice(input.pricePerMillionOutput),
-    priceCurrency: asString(input.priceCurrency) ?? DEFAULT_SETTINGS.priceCurrency
+    priceCurrency: asString(input.priceCurrency) ?? DEFAULT_SETTINGS.priceCurrency,
+    // 不 trim：模板里的空格是语法的一部分，首尾空格又不影响命令能不能跑。
+    resumeTemplate: asString(input.resumeTemplate) ?? DEFAULT_SETTINGS.resumeTemplate
   }
 }
 

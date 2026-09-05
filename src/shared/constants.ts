@@ -157,7 +157,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 像官方数字。留空时界面只显示 token 数。
   pricePerMillionInput: null,
   pricePerMillionOutput: null,
-  priceCurrency: ''
+  priceCurrency: '',
+  // 留空 = 跟随平台。默认模板依赖平台（Windows 的 cd 要 /d），
+  // 而这里拿不到平台，所以真正的默认值在渲染进程里解析。
+  resumeTemplate: ''
 }
 
 export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {

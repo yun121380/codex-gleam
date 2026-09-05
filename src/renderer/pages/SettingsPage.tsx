@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { FolderPlus, Moon, RefreshCw, Sun, Trash2, X } from 'lucide-react'
+import { FolderPlus, Moon, RefreshCw, Sun, Terminal, Trash2, X } from 'lucide-react'
 import { DEFAULT_SETTINGS } from '@shared/constants'
+import type { Platform } from '@shared/types'
 import { Button, Card, Field, SectionTitle, TextInput, Toggle } from '../components/ui'
 import { useDisplayPath } from '../lib/displayPath'
+import { defaultResumeTemplate } from '../lib/resumeCommand'
 import { useApp } from '../hooks/useAppStore'
 
 export function SettingsPage(): React.JSX.Element {
@@ -248,6 +250,35 @@ export function SettingsPage(): React.JSX.Element {
         </Card>
 
         <Card className="mt-3">
+          <SectionTitle hint="留空就用平台默认">resume 命令</SectionTitle>
+          <p className="text-[12.5px] leading-relaxed text-ink-soft">
+            会话页右上角的「复制命令」按钮，把下面这个模板填好放进剪贴板。
+            <span className="text-ink">只复制，绝不执行</span> —— 要不要回到那个会话、什么时候回去，
+            由你在终端里决定。
+          </p>
+          <Field
+            label="命令模板"
+            hint={resumeHint(bootstrap?.platform ?? 'win32')}
+          >
+            <div className="flex gap-2">
+              <TextInput
+                value={settings.resumeTemplate}
+                placeholder={defaultResumeTemplate(bootstrap?.platform ?? 'win32')}
+                onChange={(value) => void actions.updateSettings({ resumeTemplate: value })}
+              />
+              <Button
+                icon={Terminal}
+                disabled={settings.resumeTemplate === ''}
+                title="清空这一格，回到当前平台的默认模板"
+                onClick={() => void actions.updateSettings({ resumeTemplate: '' })}
+              >
+                用默认
+              </Button>
+            </div>
+          </Field>
+        </Card>
+
+        <Card className="mt-3">
           <SectionTitle>本地数据</SectionTitle>
           <p className="text-[12.5px] leading-relaxed text-ink-soft">
             本应用只保存一份"索引"（会话摘要）和这些设置。清空索引不会删除、修改或移动你的任何 Codex
@@ -290,4 +321,19 @@ function parsePrice(value: string): number | null {
   if (value.trim() === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+/**
+ * 模板下面那行说明。
+ *
+ * Windows 上多说一句 PowerShell：默认模板里的 `&&` 是 cmd.exe 的写法，
+ * PowerShell 5.1 不认它（7 以后才认）。这里只能是一句提示，不能是一个代码分支 ——
+ * 我们知道你在哪个平台，但不知道你按回车时用的是哪个 shell。
+ */
+function resumeHint(platform: Platform): string {
+  const base =
+    '{dir} 填会话的项目目录，{threadId} 填 Codex 记的会话 id。这份日志里缺哪一个，会话页会直接告诉你缺哪一个。'
+  return platform === 'win32'
+    ? `${base} 默认模板按 cmd.exe 写的；PowerShell 5.1 不认 &&，换成 ; 就行。`
+    : base
 }

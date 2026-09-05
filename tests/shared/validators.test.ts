@@ -149,6 +149,23 @@ describe('设置修正', () => {
     expect(settings).toHaveProperty('hiddenSessionIds')
     expect(settings.hiddenSessionIds).toEqual([])
   })
+
+  /**
+   * resume 模板留空表示"跟随平台默认"。
+   * 旧设置里没有这个键时必须补成空串而不是 undefined ——
+   * `<input value={undefined}>` 会让 React 把输入框切成非受控的。
+   */
+  it('缺 resumeTemplate 的旧设置补成空串', () => {
+    const settings = normalizeSettings({ maxDepth: 4 })
+    expect(settings.resumeTemplate).toBe('')
+  })
+
+  it('给了模板就原样保留，首尾空格也不动', () => {
+    // 模板里的空格是命令语法的一部分，替我们"顺手 trim 一下"只会改掉用户写的东西。
+    expect(normalizeSettings({ resumeTemplate: ' codex resume {threadId} ' }).resumeTemplate).toBe(
+      ' codex resume {threadId} '
+    )
+  })
 })
 
 describe('安全 JSON 解析', () => {
