@@ -160,7 +160,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   priceCurrency: '',
   // 留空 = 跟随平台。默认模板依赖平台（Windows 的 cd 要 /d），
   // 而这里拿不到平台，所以真正的默认值在渲染进程里解析。
-  resumeTemplate: ''
+  resumeTemplate: '',
+  // 默认建索引 —— 不建就搜不了全文，而全文搜索是这个功能的全部价值。
+  // 关掉的理由只有一个：不想让这份文本落到磁盘上。
+  buildSearchIndex: true
 }
 
 export const DEFAULT_EXPORT_OPTIONS: ExportOptions = {
@@ -381,6 +384,64 @@ export const CODEX_SESSION_INDEX_FILE = 'session_index.jsonl'
 /** 会话名索引最多读这么多行，避免异常大的索引拖慢扫描。 */
 export const MAX_SESSION_INDEX_LINES = 100_000
 
+// ---------------------------------------------------------------------------
+// 跨会话搜索
+// ---------------------------------------------------------------------------
+
+/** 倒排表落盘文件的格式版本。改了分词规则就得 +1，否则新老词条混在一张表里。 */
+export const SEARCH_INDEX_VERSION = 1
+
+/**
+ * 倒排表体积预算。
+ *
+ * 现有 session-index.json 在 674 个会话下是 2.6 MB；全文倒排比它大一个量级是
+ * 正常的，再大就该问用户还要不要建了。超预算的处理见 invertedIndex.trimToBudget。
+ */
+export const SEARCH_INDEX_BUDGET_BYTES = 30 * 1024 * 1024
+
+/** 单个词条最长多少字符。更长的是哈希、base64、data URI —— 搜不到它们没有损失。 */
+export const SEARCH_MAX_TERM_LENGTH = 48
+
+/**
+ * 纯数字词条最长多少位。
+ *
+ * 再长的是毫秒时间戳（13 位）和行号偏移，谁也不会去搜；但 2345、4004 这种
+ * 错误码与端口号得留着。
+ */
+export const SEARCH_MAX_NUMERIC_LENGTH = 8
+
+/** 单个字段进索引时最多取多少字符。一次 cat 大文件的输出可以是几 MB。 */
+export const SEARCH_MAX_FIELD_LENGTH = 64 * 1024
+
+/** 查询时一个词最多扩展成多少个词条。防止搜 "a" 把整张表拖出来。 */
+export const SEARCH_MAX_EXPANSION = 64
+
+/**
+ * 子串扩展的最短查询词长度。比这个短的词只做前缀扩展。
+ *
+ * 三个字符这条线是被一次真实的误召回逼出来的：搜 `sk` 时子串扩展命中了
+ * `desktop`（de-**sk**-top），于是"搜密钥搜不到"这条断言变成了"搜密钥能搜到那个
+ * 会话"。两个字符的针在任何一张真实词表里都能扎到一堆词，而"最短的 64 个"这个
+ * 截断会让命中结果看起来完全随机。
+ *
+ * 前缀扩展不设这条线：`以 sk 开头` 还能向用户解释，`中间某处有 sk` 不能。
+ * 中文 bigram 恰好是两个字符，所以它们永远走不到子串这一层 —— 那正是想要的，
+ * 第一层只负责粗筛，误召回该由第二层的精确匹配挡掉。
+ */
+export const SEARCH_MIN_SUBSTRING_LENGTH = 3
+
+/** 第一层默认返回多少个候选会话。 */
+export const SEARCH_DEFAULT_LIMIT = 50
+
+/** 查询串长度上限。再长的查询没有意义，只会让词条扩展炸开。 */
+export const SEARCH_MAX_QUERY_LENGTH = 200
+
+/** 命中片段的长度上限。够看清一行代码或一句话，不够就点进去看。 */
+export const SEARCH_SNIPPET_LENGTH = 160
+
+/** 一个会话里最多返回多少处命中。命中几百处时步进器已经没有意义了。 */
+export const SEARCH_MAX_HITS_PER_SESSION = 200
+
 export const PRIVACY_POINTS: readonly string[] = [
   '所有会话文件都在你自己的电脑上读取，本应用不会上传任何内容。',
   '本应用不调用任何 AI 接口、云端服务、遥测或错误上报服务。',
@@ -390,5 +451,6 @@ export const PRIVACY_POINTS: readonly string[] = [
   '默认只扫描已知的 Codex 目录，不会扫描整个硬盘。',
   '会话日志里的命令只会被展示，绝不会被重新执行。',
   '密钥、Token、密码等敏感字段默认自动打码。',
-  '索引与设置只保存在你本机的应用数据目录中，卸载后可自行删除。'
+  '全文搜索索引只建在打码之后的文本上：密钥不会被写进索引，代价是也搜不到它们。',
+  '索引（会话摘要与全文搜索索引）和设置只保存在你本机的应用数据目录中，卸载后可自行删除。'
 ]

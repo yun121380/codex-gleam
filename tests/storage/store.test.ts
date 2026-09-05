@@ -1,9 +1,11 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { SEARCH_INDEX_VERSION } from '../../src/shared/constants'
+import { emptyIndex, mergeIndex } from '../../src/main/search/invertedIndex'
 import { LocalStore } from '../../src/main/storage/store'
-import type { SessionSummary } from '../../src/shared/types'
+import type { SearchIndexFile, SessionSummary } from '../../src/shared/types'
 
 /**
  * 本地存储的并发安全。
@@ -246,6 +248,151 @@ describe('损坏与残留', () => {
     const store = new LocalStore(dir)
     await expect(store.getSettings()).resolves.toBeTruthy()
     await expect(store.getIndex()).resolves.toEqual([])
+  })
+})
+
+/**
+ * 第四个文件：全文倒排表。
+ *
+ * 它和前三个不一样的地方全在两个语义上：读不出来是 `null` 而不是空表，
+ * 清掉是删文件而不是写一张空表。这一组测试钉的就是这两件事。
+ */
+describe('全文倒排表', () => {
+  const SEARCH_INDEX_PATH = 'search-index.json'
+
+  /** 用真的 `mergeIndex` 造表，而不是手写一个字面量——落盘格式改了这里要跟着挂。 */
+  function table(): SearchIndexFile {
+    return mergeIndex({
+      previous: emptyIndex(),
+      removed: new Set<string>(),
+      added: new Map([
+        ['s-1', new Set(['lint', '离线'])],
+        ['s-2', new Set(['lint', 'build'])]
+      ]),
+      builtAt: '2026-09-05T12:00:00.000Z'
+    })
+  }
+
+  async function fileNames(): Promise<string[]> {
+    return readdir(dir)
+  }
+
+  it('存一次读回来一模一样', async () => {
+    const store = new LocalStore(dir)
+    const saved = table()
+    await store.saveSearchIndex(saved)
+
+    expect(await store.getSearchIndex()).toEqual(saved)
+    expect(await fileNames()).toContain(SEARCH_INDEX_PATH)
+  })
+
+  it('文件不存在时返回 null，不是空表', async () => {
+    // 这一条是三条降级提示的入口：`null` 才能让界面说"重新扫描一次就能建好"，
+    // 空表只会让它说"什么都没搜到"。
+    expect(await new LocalStore(dir).getSearchIndex()).toBeNull()
+  })
+
+  it('文件是坏 JSON 时返回 null，不抛', async () => {
+    await writeFile(join(dir, SEARCH_INDEX_PATH), '{ 半张表', 'utf8')
+    await expect(new LocalStore(dir).getSearchIndex()).resolves.toBeNull()
+  })
+
+  it('版本号不符时返回 null', async () => {
+    await writeFile(
+      join(dir, SEARCH_INDEX_PATH),
+      JSON.stringify({ ...table(), version: SEARCH_INDEX_VERSION + 1 }),
+      'utf8'
+    )
+    expect(await new LocalStore(dir).getSearchIndex()).toBeNull()
+  })
+
+  it('下标越界的表也返回 null——两步校验是真接上了的', async () => {
+    // `readJson` 单看这是一份合法 JSON。只有 `readIndexFile` 会发现 postings
+    // 指到了第 5 个会话而表里只有两个。漏接第二步的话这条就挂。
+    const broken = { ...table(), terms: { lint: [5] } }
+    await writeFile(join(dir, SEARCH_INDEX_PATH), JSON.stringify(broken), 'utf8')
+    expect(await new LocalStore(dir).getSearchIndex()).toBeNull()
+  })
+
+  it('清掉之后文件真的没了，而且重复清不抛', async () => {
+    const store = new LocalStore(dir)
+    await store.saveSearchIndex(table())
+    expect(await fileNames()).toContain(SEARCH_INDEX_PATH)
+
+    await store.clearSearchIndex()
+    // 写一张空表进去也能让 getSearchIndex 变空，但磁盘上那份文本还在——
+    // 而"关掉开关就不留这份文本"要求的是文件真的消失。
+    expect(await fileNames()).not.toContain(SEARCH_INDEX_PATH)
+    expect(await store.getSearchIndex()).toBeNull()
+
+    await expect(store.clearSearchIndex()).resolves.toBeUndefined()
+  })
+
+  it('清掉之后再读不会从缓存里把旧表捞回来', async () => {
+    const store = new LocalStore(dir)
+    await store.saveSearchIndex(table())
+    // 先读一次：如果这一层缓存了，这一读就把表留在内存里了。
+    expect((await store.getSearchIndex())?.sessionIds).toEqual(['s-1', 's-2'])
+
+    await store.clearSearchIndex()
+    expect(await store.getSearchIndex()).toBeNull()
+  })
+
+  it('删和写排在同一个队列里，删在后面就是删掉', async () => {
+    // 不共用队列的话，这两个调用会赛跑：删除先跑完、写入后落地，
+    // 于是"关掉开关"之后磁盘上又出现了一份完整的表。
+    const store = new LocalStore(dir)
+    await Promise.all([store.saveSearchIndex(table()), store.clearSearchIndex()])
+    expect(await fileNames()).not.toContain(SEARCH_INDEX_PATH)
+  })
+
+  it('删不掉时记一条就继续，不把 clearIndex 的其余步骤拖下水', async () => {
+    // 把它占成一个非空目录：`rm` 不带 recursive 删不掉，等价于文件被别的进程占着。
+    await mkdir(join(dir, SEARCH_INDEX_PATH), { recursive: true })
+    await writeFile(join(dir, SEARCH_INDEX_PATH, 'held.txt'), 'x', 'utf8')
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      await expect(new LocalStore(dir).clearSearchIndex()).resolves.toBeUndefined()
+      // 静默吞掉不行：清空索引是用户为了隐私点的按钮，失败了总得留下痕迹。
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('写不进去时抛出来，而且磁盘上的旧表原封不动', async () => {
+    const store = new LocalStore(dir)
+    const saved = table()
+    await store.saveSearchIndex(saved)
+
+    // 换成目录，之后针对它的写入必定失败。
+    await rm(join(dir, SEARCH_INDEX_PATH))
+    await mkdir(join(dir, SEARCH_INDEX_PATH), { recursive: true })
+    await expect(store.saveSearchIndex(emptyIndex())).rejects.toThrow()
+
+    // 这一层不缓存，所以"写失败之后读到的还是旧值"是天然成立的——
+    // 换成缓存的写法就得靠"写成功之后再更新缓存"那条纪律来保证。
+    await rm(join(dir, SEARCH_INDEX_PATH), { recursive: true })
+    await writeFile(join(dir, SEARCH_INDEX_PATH), JSON.stringify(saved), 'utf8')
+    expect(await store.getSearchIndex()).toEqual(saved)
+  })
+
+  it('四个文件各写各的，不互相阻塞也不串味', async () => {
+    const store = new LocalStore(dir)
+
+    await Promise.all([
+      ...Array.from({ length: 20 }, () => store.updateSettings({ showFullPaths: true })),
+      ...Array.from({ length: 20 }, () => store.saveIndex([summary('only')])),
+      ...Array.from({ length: 20 }, () => store.updateState({ firstRunCompleted: true })),
+      ...Array.from({ length: 20 }, () => store.saveSearchIndex(table()))
+    ])
+
+    expect((await store.getSettings()).showFullPaths).toBe(true)
+    expect((await store.getIndex())[0]?.id).toBe('only')
+    expect((await store.getState()).firstRunCompleted).toBe(true)
+    expect((await store.getSearchIndex())?.sessionIds).toEqual(['s-1', 's-2'])
+    expect((await fileNames()).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 })
 

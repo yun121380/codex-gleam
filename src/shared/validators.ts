@@ -3,9 +3,11 @@ import {
   DEFAULT_SETTINGS,
   IGNORED_DIR_NAMES,
   CONFIDENCE_HIGH,
-  CONFIDENCE_MEDIUM
+  CONFIDENCE_MEDIUM,
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_MAX_QUERY_LENGTH
 } from './constants'
-import type { AppSettings, ConfidenceLevel } from './types'
+import type { AppSettings, ConfidenceLevel, SearchRequest } from './types'
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -164,8 +166,34 @@ export function normalizeSettings(input: unknown): AppSettings {
     pricePerMillionOutput: asPrice(input.pricePerMillionOutput),
     priceCurrency: asString(input.priceCurrency) ?? DEFAULT_SETTINGS.priceCurrency,
     // 不 trim：模板里的空格是语法的一部分，首尾空格又不影响命令能不能跑。
-    resumeTemplate: asString(input.resumeTemplate) ?? DEFAULT_SETTINGS.resumeTemplate
+    resumeTemplate: asString(input.resumeTemplate) ?? DEFAULT_SETTINGS.resumeTemplate,
+    buildSearchIndex: asBoolean(input.buildSearchIndex) ?? DEFAULT_SETTINGS.buildSearchIndex
   }
+}
+
+/**
+ * 搜索请求。
+ *
+ * 查询串是从渲染进程经 IPC 过来的，得当外部输入对待 —— 主进程这一侧再校验一遍，
+ * 别指望界面已经拦过了。
+ */
+export function normalizeSearchRequest(input: unknown): SearchRequest {
+  if (!isRecord(input)) return { query: '', limit: SEARCH_DEFAULT_LIMIT }
+
+  // 截断而不是拒绝：用户粘错了一整段日志进来，给前 200 字符的结果比一句
+  // "查询太长" 有用。trim 掉首尾空白，否则末尾一个空格会多出一个空词。
+  const query = (asString(input.query) ?? '').slice(0, SEARCH_MAX_QUERY_LENGTH).trim()
+
+  // 只认非空字符串。空串当没给 —— 界面上"没选中会话"很容易写成 ''，
+  // 而带着 sessionId: '' 走进第二层会去找一个不存在的会话然后报错。
+  const sessionId = asString(input.sessionId)
+  const request: SearchRequest = {
+    query,
+    // 上限 200：第一层只返回会话 id，列表里滚过 200 条就该换个查询词了。
+    limit: Math.round(clampNumber(input.limit, 1, 200, SEARCH_DEFAULT_LIMIT))
+  }
+  if (sessionId !== null && sessionId.trim() !== '') request.sessionId = sessionId
+  return request
 }
 
 /**

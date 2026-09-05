@@ -1,6 +1,6 @@
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { APP_NAME } from '@shared/constants'
+import { APP_NAME, SEARCH_DEFAULT_LIMIT } from '@shared/constants'
 import type {
   AppSettings,
   CandidateRoot,
@@ -13,6 +13,10 @@ import type {
   ScanProgress,
   ScanRequest,
   ScanResult,
+  SearchHit,
+  SearchIndexFile,
+  SearchRequest,
+  SearchResponse,
   SessionSummary,
   StatsOverview
 } from '@shared/types'
@@ -28,6 +32,15 @@ import {
   type ScanEngineResult
 } from './scanner/scanner'
 import type { FileSystemAccess } from './scanner/fsAccess'
+import {
+  collectSummaryTerms,
+  collectTerms,
+  emptyIndex,
+  mergeIndex,
+  queryIndex
+} from './search/invertedIndex'
+import { parseQuery, type ParsedQuery } from './search/tokenize'
+import { locateHits } from './search/locate'
 import { computeStats } from './stats/stats'
 import type { LocalStore } from './storage/store'
 import { toSummary } from './parsers/buildSession'
@@ -57,8 +70,29 @@ export interface LibraryDeps {
  */
 const SESSION_CACHE_LIMIT = 3
 
+/**
+ * 降级检索时给用户的两句话。
+ *
+ * 措辞的要点是让人知道"这次没搜全文"，而不是"没搜到" —— 后者会让用户换一个词
+ * 再搜一遍，而真正该做的事是重新扫描一次（或者把开关打开）。
+ */
+const SEARCH_NOTICE_DISABLED = '全文索引已关闭，这次只搜了标题。'
+const SEARCH_NOTICE_MISSING =
+  '还没有全文索引（或索引已损坏），这次只搜了标题。重新扫描一次就能建好。'
+
 export class SessionLibrary {
   private index: SessionSummary[] = []
+  /**
+   * 全文倒排表：内存里的这一份就是 search-index.json 里的那一份。
+   *
+   * `null` 和空表是两件事，绝不能混：`null` 是"没有能用的表"（还没扫过、文件坏了、
+   * 或者用户把开关关了），检索要降级成只搜标题并且说清原因；空表是"表是好的，
+   * 里面确实一个会话都没有"。
+   *
+   * 常驻内存的理由只有一个：第一层查询要守住 674 会话下 200 ms，那条路上不许有
+   * 文件读取。表最大 30 MB，是这个应用里唯一一处刻意占内存的地方。
+   */
+  private searchIndex: SearchIndexFile | null = null
   /** 按访问顺序排列的 LRU 缓存：最早插入的排在最前面。 */
   private readonly cache = new Map<string, CodexSession>()
   private cancellation = { cancelled: false }
@@ -102,6 +136,9 @@ export class SessionLibrary {
 
   async init(): Promise<void> {
     this.index = await this.deps.store.getIndex()
+    // 读不出来就是 null，不会抛 —— 那一层把"文件不在、JSON 坏了、下标越界"
+    // 全部收敛成了 null。启动不能因为一张可以重建的表而失败。
+    this.searchIndex = await this.deps.store.getSearchIndex()
   }
 
   getSettings(): Promise<AppSettings> {
@@ -116,8 +153,26 @@ export class SessionLibrary {
     await this.deps.store.updateState({ firstRunCompleted: true })
   }
 
+  /**
+   * 改设置。
+   *
+   * 只有一项带副作用：全文索引开关由开变关的那一刻，磁盘上那张表立刻删掉，
+   * 不等下次扫描。用户关它的理由只有一个 —— 不想让这份正文留在磁盘上；
+   * 那么"关掉之后就没有了"必须是当下为真的陈述，而不是一句承诺。
+   *
+   * 反向（关变开）不自动扫描：那是几百个文件的全量重解析，不该由点一下开关触发。
+   * 界面上照常搜，只是会收到"重新扫描一次就能建好"那句提示。
+   */
   async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-    return this.deps.store.updateSettings(patch)
+    const before = await this.getSettings()
+    const after = await this.deps.store.updateSettings(patch)
+
+    if (before.buildSearchIndex && !after.buildSearchIndex) {
+      this.searchIndex = null
+      await this.deps.store.clearSearchIndex()
+    }
+
+    return after
   }
 
   async getCandidateRoots(): Promise<CandidateRoot[]> {
@@ -303,6 +358,26 @@ export class SessionLibrary {
     // 扫描过程中只往这里塞摘要；完整会话用完即弃，绝不累积。
     const produced = new Map<string, SessionSummary>()
 
+    /**
+     * 本次新解析出来的会话词条，攒着最后并进倒排表。
+     *
+     * 开关在开扫之前读一次存进局部变量，不在回调里现读：扫描要跑几十秒，
+     * 中途改设置不该让这次的表变成半份 —— 前一半会话有词条、后一半没有，
+     * 而表本身看不出哪一半缺了。
+     */
+    const buildSearchIndex = settings.buildSearchIndex
+    const producedTerms = new Map<string, ReadonlySet<string>>()
+
+    /**
+     * 表里已经有词条的那些会话。
+     *
+     * 复用一个文件的摘要意味着 `onSession` 压根不会被调到，词条也就无从收集。
+     * 所以"能不能复用"这件事，除了文件本身没变，还得加一个条件：它的词条已经在
+     * 表里了。少了这个条件，"重新扫描一次就能建好"就是一句空话 —— 表坏掉、被
+     * 用户清掉、或者上一次扫描被取消的那部分，都会因为文件没变而被永久跳过。
+     */
+    const indexedSessionIds = new Set(this.searchIndex?.sessionIds ?? [])
+
     // 上次索引过、且文件大小与修改时间都没变的文件，可以直接复用，不必重新解析。
     const knownByPath = new Map<string, KnownFile>()
     for (const summary of snapshot) {
@@ -333,13 +408,30 @@ export class SessionLibrary {
         platform: this.deps.platform,
         cancellation: this.cancellation,
         onProgress,
-        lookupKnown: (candidate) =>
-          knownByPath.get(normalizePathKey(candidate.path, this.deps.platform)) ?? null,
+        lookupKnown: (candidate) => {
+          const known = knownByPath.get(normalizePathKey(candidate.path, this.deps.platform)) ?? null
+          if (known === null || !buildSearchIndex) return known
+          // 见上面 indexedSessionIds 的那段：词条还没进表的文件必须重新解析一遍。
+          return known.summaries.every((summary) => indexedSessionIds.has(summary.id))
+            ? known
+            : null
+        },
         onReused: (summaries) => {
           for (const summary of summaries) keep(summary)
+          // 这里刻意不收词条：复用的会话本来就在上一张表里，`mergeIndex` 会把它们
+          // 的 postings 原样带过去（只重映射下标）。再收一遍等于把整份表重建一次，
+          // 而增量扫描的全部意义就是不做这件事。
         },
         onSession: (session) => {
           keep(toSummary(session) as SessionSummary)
+          // 词条只能在这一刻收：事件此刻还在内存里，出了这个回调就没了 ——
+          // 表里不留正向索引，事后想补只能把文件重新解析一遍。
+          //
+          // 跟着 `keep` 的判断走（`produced` 里有才收）：隐藏来源的会话不进列表，
+          // 也就不该进表 —— 否则它虽然不在界面上，正文还躺在磁盘的那张表里。
+          if (buildSearchIndex && produced.has(session.id)) {
+            producedTerms.set(session.id, collectTerms(session))
+          }
           // 这里刻意不调用 remember()：扫描出来的会话立刻变成垃圾，
           // 用户真正点开某个会话时会重新解析那一个文件。
         }
@@ -394,6 +486,30 @@ export class SessionLibrary {
       await this.deps.store.saveIndex(this.index)
 
       const finishedAt = new Date()
+
+      /*
+       * 倒排表跟着会话索引一起过期，用的是同一个 staleIds 和同一个 produced。
+       *
+       * 绝不在这里重新判断一遍"哪些文件真的没了"—— 那个判断是上面 provablyGone
+       * 那一串条件，重算一遍必然和会话索引对不齐，而对不齐的症状是搜出来一个
+       * 点不开的会话，或者一个明明在列表里的会话怎么都搜不到。
+       *
+       * 取消时整次不写：producedTerms 里只有已经扫到的那部分会话，把它并进去等于
+       * 拿半次扫描的结果当全量。staleIds 此时也是空的（上面那个 if 里才填），
+       * 于是"什么都不做、旧表原样留着"既是最省事的，也是唯一正确的选择。
+       */
+      if (buildSearchIndex && !result.cancelled) {
+        this.searchIndex = mergeIndex({
+          previous: this.searchIndex ?? emptyIndex(),
+          removed: staleIds,
+          added: producedTerms,
+          // 与 lastScanAt 同一个时刻：界面上"索引建于"和"上次扫描于"是同一件事，
+          // 各读一次时钟只会让它们差出几毫秒来。
+          builtAt: finishedAt.toISOString()
+        })
+        await this.deps.store.saveSearchIndex(this.searchIndex)
+      }
+
       await this.deps.store.updateState({ lastScanAt: finishedAt.toISOString() })
 
       return {
@@ -492,11 +608,17 @@ export class SessionLibrary {
    * "清空索引不会删除你的原始文件 —— 重新扫描就能再找回来"，
    * 而只清索引的话，之前从列表里移除过的会话即使被重新扫到，
    * 也会继续被这份名单挡在外面，那句话就成了空话。
+   *
+   * 倒排表也要一起删。漏掉它的后果很具体：界面上会话全没了，磁盘上却还留着一份
+   * 含全部会话正文的表 —— 而那正是按这个按钮想消除的东西。
    */
   async clearIndex(): Promise<SessionSummary[]> {
     this.index = []
     this.cache.clear()
     await this.deps.store.saveIndex(this.index)
+
+    this.searchIndex = null
+    await this.deps.store.clearSearchIndex()
 
     const settings = await this.getSettings()
     if (settings.hiddenSessionIds.length > 0) {
@@ -504,6 +626,138 @@ export class SessionLibrary {
     }
 
     return this.listSessions()
+  }
+
+  /**
+   * 跨会话搜索。分两层，`request.sessionId` 决定走不走第二层。
+   *
+   * **第一层**（不给 `sessionId`）只查表，只回答"哪些会话里有这些词"：不碰文件系统、
+   * 不解析任何会话 —— "674 会话下查询 < 200 ms"那条线全靠它，`hits` 是空数组。
+   *
+   * **第二层**（给了 `sessionId`）在那一个会话里定位到具体事件，代价是把那个文件重新
+   * 解析一遍。一次只一个，绝不顺手把候选都定位好。
+   *
+   * 三条降级路，每条都得带一句能让人知道下一步做什么的话：开关关了、还没有表
+   * （或者表坏了）、表被体积上限裁过。前两条只搜标题，第三条搜的是全文、只是可能不全。
+   * 静默降级是最坏的选择 —— 用户看到的只是"搜不到"，而这三种情况该做的事完全不同。
+   */
+  async searchSessions(request: SearchRequest): Promise<SearchResponse> {
+    const settings = await this.getSettings()
+    const parsed = parseQuery(request.query)
+
+    let table: SearchIndexFile
+    let degraded: boolean
+    let notice: string | null
+
+    if (!settings.buildSearchIndex) {
+      table = this.titleOnlyIndex()
+      degraded = true
+      notice = SEARCH_NOTICE_DISABLED
+    } else if (this.searchIndex === null) {
+      table = this.titleOnlyIndex()
+      degraded = true
+      notice = SEARCH_NOTICE_MISSING
+    } else {
+      table = this.searchIndex
+      degraded = false
+      notice =
+        table.droppedTerms > 0
+          ? `索引超出体积上限，丢掉了 ${table.droppedTerms} 个高频词，结果可能不全。`
+          : null
+    }
+
+    const result = queryIndex(table, parsed)
+    const hidden = new Set(settings.hiddenSessionIds)
+
+    return {
+      query: request.query,
+      terms: result.terms,
+      unmatched: result.unmatched,
+      sessionIds: this.rankSessionIds(
+        result.sessionIds,
+        hidden,
+        request.limit ?? SEARCH_DEFAULT_LIMIT
+      ),
+      hits:
+        request.sessionId === undefined
+          ? []
+          : await this.locateIn(request.sessionId, parsed, result.terms),
+      degraded,
+      notice
+    }
+  }
+
+  /**
+   * 第二层：把这一个会话解析出来，找出命中的具体位置。
+   *
+   * 走 `getSession` 而不是自己读文件，图的是它已经有的两件事：3 槽 LRU 加"只取要的
+   * 那一个会话"的加载逻辑，以及打码与路径替换 —— 片段里的字必须和时间线上看到的
+   * 一模一样，否则关掉「显示完整路径」之后，搜索结果反倒会把用户名露出来。
+   *
+   * 这么做有个能说清的代价：被路径替换掉的那一截（用户名、`Users`）在第一层的表里
+   * 是有的，第二层却找不到，于是"列出来了但命中 0 处"。让片段和时间线对不上比这更糟。
+   *
+   * 文件在应用外面被删了就交空数组：第一层的候选来自磁盘上的表，它可能比现实旧一步。
+   */
+  private async locateIn(
+    sessionId: string,
+    parsed: ParsedQuery,
+    expanded: readonly string[]
+  ): Promise<SearchHit[]> {
+    const session = await this.getSession(sessionId)
+    if (session === null) return []
+
+    // 用户打的词和索引扩展出来的词一起找。
+    // 少了扩展出来的：搜 `modules` 时第一层靠 `node_modules` 把这个会话筛出来了，
+    // 点进去却是"命中 0 处"。少了用户打的：降级路上表里只有标题那几个词，扩展不出
+    // 任何东西，而这一层压根不需要表就能干活。
+    const terms = [...new Set([...parsed.terms, ...expanded])]
+    return locateHits(session, { terms, phrase: parsed.phrase })
+  }
+
+  /**
+   * 只有摘要的一张临时表：标题、项目名、文件名那几个字段。
+   *
+   * 降级检索走的是**同一个** `queryIndex`，而不是另写一套"包含判断"。两套匹配规则
+   * 的下场是同一个词降级前后结果不一样（前缀算不算命中、中文按不按 bigram 切），
+   * 而用户完全看不出为什么。几百条摘要建这张表是毫秒级的，而且不落盘。
+   */
+  private titleOnlyIndex(): SearchIndexFile {
+    const added = new Map<string, ReadonlySet<string>>()
+    for (const summary of this.index) added.set(summary.id, collectSummaryTerms(summary))
+    return mergeIndex({
+      previous: emptyIndex(),
+      removed: new Set<string>(),
+      added,
+      builtAt: ''
+    })
+  }
+
+  /**
+   * 把查表结果排成列表里的顺序，再按 limit 截断。
+   *
+   * 顺序直接沿用 `this.index` 的下标 —— 它已经按 sortKey 排好，与用户在列表里看到的
+   * 顺序天然一致；在这里另起一次排序只是多一个会跑偏的地方。`queryIndex` 交出来的是
+   * 表内顺序，那个顺序对用户没有任何意义。
+   *
+   * 顺手挡掉两类 id：已隐藏的会话，以及表里有、索引里已经没有的会话。两者都是真实
+   * 存在的状态（"从索引中移除"过的那个会话就同时是这两种），而搜出来的结果里出现一条
+   * 点不开的条目，比搜不到更难解释。
+   */
+  private rankSessionIds(
+    sessionIds: readonly string[],
+    hidden: ReadonlySet<string>,
+    limit: number
+  ): string[] {
+    const position = new Map<string, number>()
+    this.index.forEach((summary, at) => {
+      if (!hidden.has(summary.id)) position.set(summary.id, at)
+    })
+
+    return sessionIds
+      .filter((id) => position.has(id))
+      .sort((left, right) => (position.get(left) ?? 0) - (position.get(right) ?? 0))
+      .slice(0, limit)
   }
 
   async getStats(now?: Date): Promise<StatsOverview> {
@@ -575,10 +829,12 @@ export class SessionLibrary {
   private async forgetFile(sourceFile: string): Promise<void> {
     const target = normalizePathKey(sourceFile, this.deps.platform)
     const kept: SessionSummary[] = []
+    const gone = new Set<string>()
 
     for (const summary of this.index) {
       if (normalizePathKey(summary.sourceFile, this.deps.platform) === target) {
         this.cache.delete(summary.id)
+        gone.add(summary.id)
         continue
       }
       kept.push(summary)
@@ -587,6 +843,10 @@ export class SessionLibrary {
     if (kept.length === this.index.length) return
     this.index = kept
     await this.deps.store.saveIndex(this.index)
+
+    // 倒排表也得跟着忘 —— 这条路不走 runScan，那边的过期逻辑帮不上忙。
+    // 漏掉这里的症状是搜出一个已经不在索引里的会话，点开一片空白。
+    await this.mergeSearchIndex({ removed: gone, added: new Map() })
   }
 
   /** 把新解析出的会话并入索引与缓存。 */
@@ -603,16 +863,51 @@ export class SessionLibrary {
       this.cache.clear()
     }
 
+    // 导入这条路和扫描一样要收词条，而且这里更简单：事件就在手上。
+    const addedTerms = new Map<string, ReadonlySet<string>>()
+
     for (const session of sessions) {
       if (hiddenPaths.has(normalizePathKey(session.sourceFile, this.deps.platform))) continue
       // 手动导入的量很小，可以顺手放进缓存（remember 内部有上限）。
       this.remember(session)
       next.set(session.id, toSummary(session) as SessionSummary)
+      if (settings.buildSearchIndex) addedTerms.set(session.id, collectTerms(session))
     }
+
+    const dropped = new Set(merge ? [] : this.index.map((summary) => summary.id))
 
     this.index = [...next.values()].sort((a, b) => sortKey(b) - sortKey(a))
     await this.deps.store.saveIndex(this.index)
+    // merge === false 的意思是"拿这次的结果替换掉索引"，表也照此办理：
+    // 旧条目全作废，只留这一批。
+    await this.mergeSearchIndex({ removed: dropped, added: addedTerms })
     return this.listSessions()
+  }
+
+  /**
+   * 把倒排表跟着索引改掉，然后落盘。
+   *
+   * 三个入口用它（导入、忘掉一个文件，以及经由它们的示例数据），扫描收尾那一处例外
+   * —— 那里要复用扫描自己算出来的 staleIds，并且要在取消时整次跳过。落盘只有这一处
+   * 与那一处，加第四个入口的人不至于两边都漏。
+   *
+   * 开关关着时什么都不做：那种情况下磁盘上本来就不该有这个文件。
+   */
+  private async mergeSearchIndex(input: {
+    removed: ReadonlySet<string>
+    added: ReadonlyMap<string, ReadonlySet<string>>
+  }): Promise<void> {
+    const settings = await this.getSettings()
+    if (!settings.buildSearchIndex) return
+    if (input.removed.size === 0 && input.added.size === 0) return
+
+    this.searchIndex = mergeIndex({
+      previous: this.searchIndex ?? emptyIndex(),
+      removed: input.removed,
+      added: input.added,
+      builtAt: new Date().toISOString()
+    })
+    await this.deps.store.saveSearchIndex(this.searchIndex)
   }
 }
 

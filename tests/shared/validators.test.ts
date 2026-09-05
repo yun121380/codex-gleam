@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SETTINGS } from '../../src/shared/constants'
+import {
+  DEFAULT_SETTINGS,
+  SEARCH_DEFAULT_LIMIT,
+  SEARCH_MAX_QUERY_LENGTH
+} from '../../src/shared/constants'
 import {
   coerceTimestamp,
   confidenceFromScore,
   flattenTextContent,
   hasAllowedExtension,
   isIgnoredDirName,
+  normalizeSearchRequest,
   normalizeSettings,
   safeJsonParse
 } from '../../src/shared/validators'
@@ -165,6 +170,46 @@ describe('设置修正', () => {
     expect(normalizeSettings({ resumeTemplate: ' codex resume {threadId} ' }).resumeTemplate).toBe(
       ' codex resume {threadId} '
     )
+  })
+
+  /**
+   * 逐字段补，不能"有一个字段就整体当合法"。
+   *
+   * 补 true 而不是 false：这个开关是 A4 才有的，在它之前存下来的设置里
+   * 一定没有它 —— 补 false 会让所有老用户升级后悄悄搜不到东西。
+   */
+  it('缺 buildSearchIndex 的旧设置补成 true', () => {
+    expect(normalizeSettings({ maxDepth: 4 }).buildSearchIndex).toBe(true)
+  })
+
+  it('明确关掉时保持 false', () => {
+    expect(normalizeSettings({ buildSearchIndex: false }).buildSearchIndex).toBe(false)
+  })
+})
+
+describe('搜索请求修正', () => {
+  it('超长查询截到上限而不是被拒绝', () => {
+    // 粘错了一整段日志进来时，给前 200 字符的结果比一句"查询太长"有用。
+    const request = normalizeSearchRequest({ query: 'x'.repeat(SEARCH_MAX_QUERY_LENGTH + 50) })
+    expect(request.query).toHaveLength(SEARCH_MAX_QUERY_LENGTH)
+  })
+
+  it('limit 夹进 [1, 200]，缺了用默认值', () => {
+    expect(normalizeSearchRequest({ query: 'a', limit: 0 }).limit).toBe(1)
+    expect(normalizeSearchRequest({ query: 'a', limit: 9999 }).limit).toBe(200)
+    expect(normalizeSearchRequest({ query: 'a' }).limit).toBe(SEARCH_DEFAULT_LIMIT)
+  })
+
+  it('空串 sessionId 当没给', () => {
+    // 界面上"没选中会话"很容易写成 ''，带着它走进第二层会去找一个不存在的会话。
+    expect(normalizeSearchRequest({ query: 'a', sessionId: '' })).not.toHaveProperty('sessionId')
+    expect(normalizeSearchRequest({ query: 'a', sessionId: '  ' })).not.toHaveProperty('sessionId')
+    expect(normalizeSearchRequest({ query: 'a', sessionId: 's-1' }).sessionId).toBe('s-1')
+  })
+
+  it('不是对象时给一个空查询，而不是抛异常', () => {
+    expect(normalizeSearchRequest(null).query).toBe('')
+    expect(normalizeSearchRequest('搜点什么').query).toBe('')
   })
 })
 

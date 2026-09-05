@@ -1,16 +1,18 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { DEFAULT_SETTINGS } from '@shared/constants'
-import type { AppSettings, SessionSummary } from '@shared/types'
+import type { AppSettings, SearchIndexFile, SessionSummary } from '@shared/types'
 import { normalizeSettings, safeJsonParse } from '@shared/validators'
+import { readIndexFile } from '../search/invertedIndex'
 
 /**
  * 本地存储。
  *
- * 只有三个 JSON 文件，全部放在系统的应用数据目录里：
+ * 只有四个 JSON 文件，全部放在系统的应用数据目录里：
  *   settings.json      —— 用户设置
  *   session-index.json —— 会话索引（只有摘要，不含事件内容，体积很小）
  *   app-state.json     —— 是否已完成首次引导
+ *   search-index.json  —— 全文倒排表（词 → 会话下标，只建在打码之后的文本上）
  *
  * 没有数据库、没有远程同步。删掉这个目录就等于恢复出厂设置。
  */
@@ -18,6 +20,7 @@ import { normalizeSettings, safeJsonParse } from '@shared/validators'
 const SETTINGS_FILE = 'settings.json'
 const INDEX_FILE = 'session-index.json'
 const STATE_FILE = 'app-state.json'
+const SEARCH_INDEX_FILE = 'search-index.json'
 
 interface AppState {
   firstRunCompleted: boolean
@@ -150,6 +153,57 @@ export class LocalStore {
     await enqueue(file, () => writeJsonAtomic(file, next))
     this.indexCache = next
     return next
+  }
+
+  /**
+   * 读全文倒排表。**读不出来返回 `null`，而不是一张空表。**
+   *
+   * 两件事分给两个函数：`readJson` 管"文件在不在、是不是合法 JSON"，
+   * `readIndexFile` 管"内容是不是一张能用的表"（版本号、越界的下标那些）。
+   *
+   * `null` 和空表在语义上完全不同，调用方必须能分得开：`null` 是"没有索引"
+   * ——界面要降级成只搜标题，并说清重新扫描一次就能建好；空表是"库里真的
+   * 一个会话都没有"。把读失败悄悄变成 `emptyIndex()`，用户看到的就只是
+   * "搜什么都搜不到"，而这两种情况下他该做的事完全不一样。
+   *
+   * 这一层**不缓存**。表最大 30 MB，而 `library` 拿到之后本来就自己留着一份，
+   * store 再留一份就是白占一倍内存；况且整个生命周期里这个方法只在 `init()`
+   * 调一次。不缓存还顺手躲开一个坑：`clearSearchIndex()` 之后再读，缓存里
+   * 那张已经删掉的表不会被当成"还在"。
+   */
+  async getSearchIndex(): Promise<SearchIndexFile | null> {
+    const raw = await readJson<unknown>(this.path(SEARCH_INDEX_FILE), null)
+    return readIndexFile(raw)
+  }
+
+  /** 写全文倒排表。与 `saveIndex` 同一套：同一个写队列、同一个原子写。 */
+  async saveSearchIndex(index: SearchIndexFile): Promise<void> {
+    const file = this.path(SEARCH_INDEX_FILE)
+    await enqueue(file, () => writeJsonAtomic(file, index))
+  }
+
+  /**
+   * 把倒排表这个文件删掉——不是写一张空表进去。
+   *
+   * 空表与没有表的区别见 `getSearchIndex`；更要紧的是这个方法的用途：用户点
+   * "清空本地索引"，或者把全文索引开关关掉。这两件事对用户的承诺都是"磁盘上
+   * 不再留着这份文本"，写一张空表满足不了它。
+   *
+   * 走同一个写队列，否则一次排在后面的 `saveSearchIndex` 会在删除之后又把
+   * 文件写回来。文件本来就不存在算成功（`force: true` 吞掉 ENOENT）。
+   *
+   * 删不掉时只记一条就继续：调用它的是 `clearIndex()`，那边还有会话索引和
+   * 隐藏名单要清，为一个删不掉的文件把后面几步全放弃是更坏的结果。
+   */
+  async clearSearchIndex(): Promise<void> {
+    const file = this.path(SEARCH_INDEX_FILE)
+    await enqueue(file, async () => {
+      try {
+        await rm(file, { force: true })
+      } catch (error) {
+        console.warn('[存储] 删除全文索引失败：', error)
+      }
+    })
   }
 
   async getState(): Promise<AppState> {

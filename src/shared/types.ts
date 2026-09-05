@@ -299,6 +299,14 @@ export interface AppSettings {
    * 真正的默认值在知道平台的地方解析。
    */
   resumeTemplate: string
+  /**
+   * 建立全文搜索索引。
+   *
+   * 关掉后搜索降级为只搜标题，且磁盘上不留这份文本 —— 这是它存在的意义：
+   * 索引会把全部会话的正文（打码之后的）落到磁盘上，那是今天的
+   * `session-index.json` 没有的东西，所以得给一个能彻底关掉的开关。
+   */
+  buildSearchIndex: boolean
 }
 
 export interface ExportOptions {
@@ -394,4 +402,75 @@ export interface PrivacyNotice {
   title: string
   points: string[]
   storageLocation: string
+}
+
+// ---------------------------------------------------------------------------
+// 跨会话搜索
+// ---------------------------------------------------------------------------
+
+/**
+ * 落盘的倒排表。
+ *
+ * postings 存的是 `sessionIds` 里的下标，不是会话 id 本身：674 个会话、每个 id
+ * 36 字符，一个高频词的 postings 就要 24 KB；换成下标是 1—3 个字符。代价是增量
+ * 更新时要做一次下标重映射（见 `main/search/invertedIndex.ts` 的 mergeIndex）。
+ *
+ * 这里**没有**正向索引（会话 → 词）。删一个会话时不需要它：扫一遍倒排表、把指向
+ * 它的下标抹掉即可。多存一份就多一份会过期的记忆。
+ *
+ * 表里的词条一律来自**打码之后**的文本，与 `redactSensitive` 那个开关无关 ——
+ * 那个开关管"给界面看什么"，管不到"往磁盘写什么"。
+ */
+export interface SearchIndexFile {
+  /** 格式版本。对不上就整份丢掉重建，不做逐版本迁移 —— 它随时能从原始文件重建。 */
+  version: number
+  /** 会话 id，postings 里的下标指向这里。 */
+  sessionIds: string[]
+  /** 词 → 出现过这个词的会话下标，升序、无重复。 */
+  terms: Record<string, number[]>
+  /** 超预算被丢掉的词条数。> 0 时界面要说"结果可能不全"。 */
+  droppedTerms: number
+  /** 建成时间，ISO 字符串。只用于界面展示，不参与失效判断。 */
+  builtAt: string
+}
+
+export interface SearchRequest {
+  query: string
+  /**
+   * 给了就是第二层：只在这一个会话里定位，会解析这个文件。
+   * 不给就是第一层：只查倒排表，不碰任何文件，这是 < 200 ms 的那条路。
+   */
+  sessionId?: string
+  /** 候选会话数上限。 */
+  limit?: number
+}
+
+export interface SearchHit {
+  sessionId: string
+  eventId: string
+  /** 事件在 `session.events` 里的下标，界面直接拿它设 cursor。 */
+  eventIndex: number
+  eventType: CodexEventType
+  /** 命中所在字段的中文标签，例如"命令"、"输出"。 */
+  field: string
+  /** 已打码、已裁剪的上下文片段。 */
+  snippet: string
+  /** 片段里要高亮的区间，[起, 止)，相对 snippet 的下标。 */
+  ranges: Array<[number, number]>
+}
+
+export interface SearchResponse {
+  query: string
+  /** 实际参与检索的词条（扩展之后）。界面可以据此解释"为什么这条也算命中"。 */
+  terms: string[]
+  /** 打进查询但索引里一个都没扩展出来的词。不能悄悄当它不存在。 */
+  unmatched: string[]
+  /** 第一层结果：候选会话 id，按现有排序键（新的在前）。 */
+  sessionIds: string[]
+  /** 第二层结果。第一层查询时是空数组。 */
+  hits: SearchHit[]
+  /** 走了降级路径（索引缺失 / 损坏 / 开关关着）。 */
+  degraded: boolean
+  /** 降级或结果可能不全时给用户的一句话；正常时为 null。 */
+  notice: string | null
 }
