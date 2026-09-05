@@ -109,6 +109,33 @@ export const DEPTH_LIMIT_PLACEHOLDER = '[嵌套过深，未展开]'
 export const REDACTION_MAX_DEPTH = 40
 
 /**
+ * 命中报告里每条上下文最多多少字符。
+ *
+ * 比搜索片段的 SEARCH_SNIPPET_LENGTH 短：那边一屏只放一条，这边是一个按规则
+ * 分组的列表，一屏要放下好几条才看得出「这条规则是不是误伤」。
+ */
+export const REDACTION_CONTEXT_LENGTH = 120
+
+/**
+ * 同一条规则最多留几条样例。
+ *
+ * 计数是精确的，被限制的只有样例。一条规则命中三百次时，看五条就够判断它是不是
+ * 误伤，第六条起没有新信息 —— 而三百条打码片段要占的内存是实打实的。
+ */
+export const REDACTION_REPORT_MAX_SAMPLES = 5
+
+/** 「被判为不是密钥」最多列几条。面板上一屏能读完的量。 */
+export const REDACTION_REPORT_MAX_KEPT = 30
+
+/**
+ * 最多统计多少个不同的「键名 + 原因」组合。
+ *
+ * 超过就停止新增并置 keptTruncated —— 一个 JSON 里出现五百个不同的沾敏感词的
+ * 键名时，这份报告本身已经没法读了，继续攒下去只是在占内存。
+ */
+export const REDACTION_REPORT_MAX_KEPT_KEYS = 500
+
+/**
  * 敏感字段名。只要 JSON 的键名或文本中的标签命中这些词，其值就会被打码。
  * 规格明确要求的：API Key / Token / Password / Secret / Authorization / Cookie。
  */

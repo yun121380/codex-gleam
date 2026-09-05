@@ -1,4 +1,5 @@
 import { REDACTION_PLACEHOLDER } from '@shared/constants'
+import type { KeptReason } from '@shared/types'
 
 /**
  * 敏感键名判定。
@@ -43,6 +44,56 @@ export function shouldMaskValue(value: string): boolean {
   if (/^[[<({]/.test(trimmed)) return false
   if (NON_SECRET_VALUE_PATTERN.test(trimmed)) return false
   return true
+}
+
+/**
+ * 沾没沾敏感词。宽松版：不管词形，只问「值不值得解释」。
+ *
+ * 它存在的唯一理由是**别把面板灌满**。`keyKeptReason` 要回答的是「这个键名为什么
+ * 没被当成敏感的」，而库里绝大多数键名（`id`、`timestamp`、`content`）跟这件事
+ * 毫无关系 —— 它们不是「被排除的敏感键名」，报出来会把真正值得看的那几条埋掉。
+ */
+const SENSITIVE_HINT_PATTERN = /auth|token|key|secret|pass|pwd|cookie|credential|dsn/i
+
+/**
+ * 键名为什么**没**被判为敏感。
+ *
+ * `null` 有两种含义，都表示「没什么可解释的」：它确实敏感（那是命中，不是排除），
+ * 或者它跟敏感词毫无关系。
+ *
+ * 顺序有讲究：TOKEN_METRIC 必须排在 isSensitiveKey 前面。isSensitiveKey 内部对
+ * 计数类键名也返回 false，两种「false」在它那里是一样的，在这里必须分开 ——
+ * `input_tokens` 是「这是个计数」，`author` 是「词形不符」，用户读到的是两句话。
+ */
+export function keyKeptReason(key: string): KeptReason | null {
+  if (typeof key !== 'string' || key === '') return null
+  const normalized = normalizeKeyName(key)
+  if (!SENSITIVE_HINT_PATTERN.test(normalized)) return null
+  if (TOKEN_METRIC_PATTERN.test(normalized)) return 'metric-name'
+  if (isSensitiveKey(key)) return null
+  return 'name-not-matched'
+}
+
+/**
+ * 值为什么**没**被打码。只在键名已经判为敏感时问这个。
+ *
+ * 这里的判断顺序和 shouldMaskValue 只差一处：**占位符挪到了最前面**。
+ * shouldMaskValue 先看长度再看占位符，两个顺序的结果一样、先看长度还更省；
+ * 但这里不行 —— 被前面阶段截半的 `[已打码` 有 4 个字符、还以 `[` 开头，顺序反了
+ * 就会被报成 value-is-template，那是在说「这个值是个模板变量」，而它其实是
+ * 「这个值刚刚已经被打过码了」。已经打过码不是排除，返回 null。
+ *
+ * 其余三条保持和 shouldMaskValue 完全相同的先后，因为这份报告要能被反驳：
+ * 报出来的原因必须是**真正让 shouldMaskValue 返回 false 的那一行**。
+ */
+export function valueKeptReason(value: string): KeptReason | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (trimmed.includes(REDACTION_PLACEHOLDER) || trimmed.includes('已打码')) return null
+  if (trimmed.length < 4) return 'value-too-short'
+  if (/^[[<({]/.test(trimmed)) return 'value-is-template'
+  if (NON_SECRET_VALUE_PATTERN.test(trimmed)) return 'value-not-secret'
+  return null
 }
 
 export interface TextPattern {

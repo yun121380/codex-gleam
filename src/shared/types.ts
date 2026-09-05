@@ -474,3 +474,83 @@ export interface SearchResponse {
   /** 降级或结果可能不全时给用户的一句话；正常时为 null。 */
   notice: string | null
 }
+
+/**
+ * 键名或值为什么**没**被打码。
+ *
+ * 每一条都指得出 `main/redaction/patterns.ts` 里的某一行判断 —— 这是这份报告
+ * 「可反驳」的全部含义：用户看到 `author` 被排除，能自己去代码里对出是哪一条
+ * 规则干的，而不是只能相信面板。
+ *
+ * 注意这里**没有**「已经打过码了」这一条。第 5 个阶段看到的 `Authorization:
+ * [已打码]` 是第 3 个阶段刚打的，把它报成「被判为不是密钥」会把事实说反。
+ */
+export type KeptReason =
+  /** 键名是计数或配置项：`input_tokens`、`keyboard`、`monkey` —— TOKEN_METRIC_PATTERN。 */
+  | 'metric-name'
+  /** 沾了敏感词但词形不符：`author` 里的 auth —— SENSITIVE_KEY_PATTERN 的两个词边界。 */
+  | 'name-not-matched'
+  /** 值不足 4 个字符：源码里的 `password: str` —— shouldMaskValue 的长度下限。 */
+  | 'value-too-short'
+  /** 值是占位符或模板：`<your-key>`、`{{TOKEN}}` —— shouldMaskValue 的 /^[[<({]/。 */
+  | 'value-is-template'
+  /** 值是 true / false / 数字 / n-a 之类 —— NON_SECRET_VALUE_PATTERN。 */
+  | 'value-not-secret'
+
+/**
+ * 一处命中。
+ *
+ * `maskedContext` 是**打码之后**那份文本里切出来的片段，绝不携带原值 ——
+ * 一个为打码而生的审计面板如果把它找到的密钥回显出来，它自己就是泄露口。
+ */
+export interface RedactionHit {
+  /**
+   * 哪条规则打的。六种取值：
+   * `known-secret:<模式名>`（如 `known-secret:openai`）、`cookie-line`、
+   * `auth-scheme`、`cli-flag`、`key-value`、`sensitive-key`。
+   */
+  rule: string
+  /** 触发它的键名。第 1、3 阶段不看键名，所以是 null。 */
+  keyName: string | null
+  /** 命中落在哪条事件上。会话标题与摘要里的告警不属于任何一步，是 null。 */
+  eventId: string | null
+  /** 打码后的上下文片段，最长 REDACTION_CONTEXT_LENGTH。 */
+  maskedContext: string
+}
+
+export interface RedactionRuleGroup {
+  rule: string
+  /** 精确计数，**不受**样例上限影响。 */
+  count: number
+  /**
+   * 最多 REDACTION_REPORT_MAX_SAMPLES 条。
+   *
+   * `samples.length < count` 就是被截断了 —— 别把 `samples.length` 当成命中数。
+   */
+  samples: RedactionHit[]
+}
+
+export interface RedactionKeptEntry {
+  keyName: string
+  reason: KeptReason
+  count: number
+}
+
+export interface RedactionReport {
+  sessionId: string
+  /**
+   * 打码开关当前是开还是关。
+   *
+   * 关着时这份报告的意思变成「你现在要分享的是原文，如果打开开关会打掉这些」——
+   * 那正是最该看它的时刻，所以开关关着时审计照跑。
+   */
+  redactEnabled: boolean
+  /** 所有分组的 count 之和。 */
+  totalHits: number
+  /** 按 count 降序，同 count 时按 rule 字典序（让输出可复现）。 */
+  groups: RedactionRuleGroup[]
+  /** 按 count 降序，最多 REDACTION_REPORT_MAX_KEPT 条。 */
+  kept: RedactionKeptEntry[]
+  /** kept 没列全（超过条数上限，或不同组合超过 REDACTION_REPORT_MAX_KEPT_KEYS）。 */
+  keptTruncated: boolean
+}
