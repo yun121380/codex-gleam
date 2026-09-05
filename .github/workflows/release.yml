@@ -1,0 +1,133 @@
+# 三平台打包与发布。spec 3.4：打 tag 后产出三平台安装包 + 一份 SHA256SUMS.txt。
+# 这里不接自动更新渠道（electron-builder.yml 里 publish: null），
+# Release 只是"把文件放在一个地方"，应用自己永远不会去联网查版本。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# 默认只读。只有 publish job 需要写权限（建 Release），单独在那边开。
+permissions:
+  contents: read
+
+# 同一个 tag 不要同时跑两条流水线。不取消正在跑的那条：
+# 打包要好几分钟，中途掐掉会留下一个只上传了一半产物的 Release。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # 名字写死，不让 matrix 把 script 也拼进 check 名里。
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: package:win
+          - os: macos-latest
+            script: package:mac
+          - os: ubuntu-latest
+            script: package:linux
+
+    steps:
+      # 全量历史：buildEvidence 要 git sha（CI 上其实读 GITHUB_SHA，
+      # 但本地跑 workflow_dispatch 调试时靠 git rev-parse）。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 与 verify.yml 同理：版本号从 package.json 的 packageManager 读。
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 先跑一遍校验：不给自己发一个测试是红的包。
+      - name: Verify
+        run: pnpm verify
+
+      # 构建期证据（git sha / 测试数 / 时间）与完整依赖树，
+      # 单独成一步是为了在构建日志里好找（spec 3.4 与 4.3）。
+      # package:* 脚本里还会再跑一次，那次是为了保证产物目录一定存在。
+      - name: Build evidence and dependency tree
+        run: pnpm evidence
+
+      - name: Package
+        run: pnpm ${{ matrix.script }}
+        env:
+          # 明确告诉 electron-builder："这是未签名构建，别去找证书。"
+          # mac 上不写这行会因为找不到签名身份而整个打包失败。
+          # 这不是绕过检查 —— 我们本来就没有 Apple 证书，也不打算有。
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Upload build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-${{ matrix.os }}
+          path: build/generated/*.json
+
+      # 只捞安装包本身：release/ 下还有 win-unpacked/ 这类中间目录，
+      # 以及 *.blockmap（增量更新用的索引，我们没有自动更新，不发）。
+      - name: Collect installers
+        shell: bash
+        run: |
+          mkdir -p dist-artifacts
+          find release -maxdepth 1 -type f \
+            \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' \
+               -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) \
+            -exec cp {} dist-artifacts/ \;
+          ls -l dist-artifacts
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: dist-artifacts/*
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # 建 Release 要写权限，只在这一个 job 上开。
+    permissions:
+      contents: write
+    steps:
+      # 只为了拿到 scripts/sha256sums.mjs。它只用 node 内置模块，
+      # 所以这个 job 不需要 pnpm，也不需要装依赖。
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: dist-artifacts
+          merge-multiple: true
+
+      # SHA256SUMS.txt 必须在所有平台的产物都到齐之后一次算完，
+      # 否则三个平台各自算一份，用户拿到三个互不包含的清单。
+      - name: Compute checksums
+        run: node scripts/sha256sums.mjs dist-artifacts dist-artifacts/SHA256SUMS.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

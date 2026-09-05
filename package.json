@@ -10,6 +10,7 @@
   "engines": {
     "node": ">=20"
   },
+  "comment:scripts": "package:* 都先跑 evidence：build/generated 不存在时 electron-builder 只 warn 不报错，会安静地发出一个缺构建期证据的包。",
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
@@ -22,8 +23,10 @@
     "icon": "electron scripts/render-icon.mjs",
     "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
     "evidence": "node scripts/buildEvidence.mjs && node scripts/dependencyTree.mjs",
-    "package:win": "electron-vite build && electron-builder --win --config electron-builder.yml",
-    "package:dir": "electron-vite build && electron-builder --dir --config electron-builder.yml"
+    "package:win": "pnpm run evidence && electron-vite build && electron-builder --win --config electron-builder.yml",
+    "package:mac": "pnpm run evidence && electron-vite build && electron-builder --mac --config electron-builder.yml",
+    "package:linux": "pnpm run evidence && electron-vite build && electron-builder --linux --config electron-builder.yml",
+    "package:dir": "pnpm run evidence && electron-vite build && electron-builder --dir --config electron-builder.yml"
   },
   "comment:dependencies": "只有主进程在运行时真正 require 的包才放这里；渲染进程的依赖会被 Vite 打进 bundle，因此归入 devDependencies，安装包里不必再带一份。",
   "dependencies": {

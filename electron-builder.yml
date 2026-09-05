@@ -20,6 +20,15 @@ extraResources:
     to: fixtures
     filter:
       - '**/*'
+  # 构建期证据（git sha / 测试数 / 完整依赖树）随包发出：
+  # B3 的离线自检页从 process.resourcesPath 下的 generated/ 读它。
+  # 这个目录是 `pnpm evidence` 生成的。electron-builder 遇到不存在的 from
+  # 只打一行 warn 就跳过（app-builder-lib 的 copyFiles），不会让打包失败 ——
+  # 所以 package:* 脚本里一律先跑 evidence，否则会安静地发出一个缺证据的包。
+  - from: build/generated
+    to: generated
+    filter:
+      - '**/*.json'
 
 asar: true
 compression: normal
@@ -57,9 +66,14 @@ mac:
     - dmg
   icon: build/icon.png
   category: public.app-category.developer-tools
+  # 产物名走 ASCII。默认会用 productName（拾光）当文件名，而 GitHub Release
+  # 上传资产时会把非 ASCII 字符替换掉，SHA256SUMS.txt 里记的名字就对不上了。
+  artifactName: Gleam-${version}-${arch}.${ext}
 
 linux:
   target:
     - AppImage
   icon: build/icon.png
   category: Development
+  # 同 mac：文件名保持 ASCII，与校验清单一致。
+  artifactName: Gleam-${version}-${arch}.${ext}
