@@ -6,6 +6,10 @@ import { formatListTime, formatRelativeTime } from '../../src/renderer/lib/forma
  *
  * 并行子代理会在同一分钟里跑出十几个会话，标题还都一样（收到的是同一段任务），
  * 只显示"13 天前"就分不清谁是谁 —— 所以隔了一天以上要给出确切时刻。
+ *
+ * 下面那些 `08-16 20:50` 是本地时区下的结果。时区由 `vitest.config.ts` 里的
+ * `env.TZ` 钉在 Asia/Shanghai，别把它去掉：CI 的 runner 是 UTC，
+ * 一去掉这三条断言就会差 8 小时。
  */
 const NOW = Date.parse('2026-08-30T14:00:00+08:00')
 
