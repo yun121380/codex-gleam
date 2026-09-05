@@ -20,6 +20,7 @@
     "test:watch": "vitest",
     "icon": "electron scripts/render-icon.mjs",
     "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
+    "evidence": "node scripts/buildEvidence.mjs && node scripts/dependencyTree.mjs",
     "package:win": "electron-vite build && electron-builder --win --config electron-builder.yml",
     "package:dir": "electron-vite build && electron-builder --dir --config electron-builder.yml"
   },
