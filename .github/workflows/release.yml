@@ -6,7 +6,15 @@ name: release
 on:
   push:
     tags: ['v*']
+  # 手动跑 = 演练。填一个 tag 名就走完整条尾巴（下载产物 → 算校验和 → 建
+  # Release → 上传资产），但产出的是草稿：草稿不会创建 tag、非协作者看不见、
+  # 不进公开列表、不发通知，删掉之后什么都不留。留空就只跑构建，publish 跳过。
   workflow_dispatch:
+    inputs:
+      dry_run_tag:
+        description: '演练用的 tag 名（留空＝只跑构建，不建 Release）'
+        required: false
+        default: ''
 
 # 默认只读。只有 publish job 需要写权限（建 Release），单独在那边开。
 permissions:
@@ -19,9 +27,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 产物文件名里的版本号取自 package.json，不是取自 tag。两者不一致就会发出一个
+  # 标着 v1.0.1、里面全是 Gleam-1.0.0-*.exe 的 Release，SHA256SUMS.txt 也跟着错。
+  # 先花 20 秒挡住，别等三个平台都打完了才发现。
+  #
+  # 带后缀的 tag（v1.1.0-rc.1、流水线自检用的）跳过校验：预发布本来就不追求
+  # 文件名和 tag 严格对齐，自检更不需要为了跑一遍流水线去改 package.json。
+  guard:
+    name: guard tag version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare tag with package.json version
+        shell: bash
+        # ref 走环境变量而不是直接插值进脚本 —— 插值等于把 ref 名当代码执行。
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" != tag ]; then
+            echo "不是 tag 触发（$REF_TYPE: $TAG），跳过版本校验。"
+            exit 0
+          fi
+          case "$TAG" in
+            *-*)
+              echo "tag $TAG 带后缀，按预发布/自检处理，跳过版本校验。"
+              exit 0
+              ;;
+          esac
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v${version}" ]; then
+            echo "::error::tag $TAG 与 package.json 里的 $version 不一致 —— 产物文件名会写成 $version。先改 package.json，再打 tag。"
+            exit 1
+          fi
+          echo "tag $TAG 与 package.json 里的 $version 一致。"
+
   build:
     # 名字写死，不让 matrix 把 script 也拼进 check 名里。
     name: build (${{ matrix.os }})
+    needs: guard
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -100,6 +145,10 @@ jobs:
   publish:
     name: publish release
     needs: build
+    # 不是 tag 触发、又没给演练用的 tag 名，就没有可发的东西。直接跳过，
+    # 让手动自检以绿色收场 —— 而不是三个平台都打完了，卡在
+    # "GitHub Releases requires a tag" 上留一条红记录。
+    if: github.ref_type == 'tag' || inputs.dry_run_tag != ''
     runs-on: ubuntu-latest
     # 建 Release 要写权限，只在这一个 job 上开。
     permissions:
@@ -128,6 +177,15 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          # tag 触发就用 tag 本身；手动演练用输入里给的名字（草稿不建 tag，
+          # 所以这个名字此刻还不必存在）。
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || inputs.dry_run_tag }}
+          draft: ${{ github.ref_type != 'tag' }}
+          # 带后缀的 tag（v1.1.0-rc.1）算预发布。这不只是个标签：GitHub 的
+          # "Latest" 徽章和 /releases/latest/download/ 只认非预发布的 Release。
+          # 不标的话，一个 rc 会把正式版从仓库首页顶下去，而它里面的文件名
+          # 又是从 package.json 取的版本号 —— 撞名不同码，正好是最坏的情况。
+          prerelease: ${{ github.ref_type == 'tag' && contains(github.ref_name, '-') }}
           files: dist-artifacts/*
           generate_release_notes: true
           fail_on_unmatched_files: true
