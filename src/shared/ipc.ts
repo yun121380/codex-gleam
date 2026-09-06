@@ -13,6 +13,8 @@ import type {
   ScanResult,
   SearchRequest,
   SearchResponse,
+  SelfCheckReport,
+  SelfCheckRequest,
   SessionSummary,
   StatsOverview
 } from './types'
@@ -44,7 +46,9 @@ export const IPC = {
   settingsGet: 'settings:get',
   settingsUpdate: 'settings:update',
 
-  revealInFolder: 'os:reveal-in-folder'
+  revealInFolder: 'os:reveal-in-folder',
+
+  selfCheck: 'self-check:read'
 } as const
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC]
@@ -96,4 +100,12 @@ export interface GleamApi {
    * baseDir 用来解析相对路径 —— 日志里记的常常就是 `src/app.ts` 这种。
    */
   revealInFolder(targetPath: string, baseDir?: string | null): Promise<boolean>
+
+  /**
+   * 这次运行的离线自检报告：拦截计数、CSP、preload 面、TLS 验证器、构建期证据。
+   *
+   * 叫 `read` 而不是 `get`，因为它**带副作用** —— 带上 `armProbe` 就会顺手授权
+   * 一个地址走「你自己试」。`get` 会被读成纯查询，那是骗人。
+   */
+  readSelfCheck(request?: SelfCheckRequest): Promise<SelfCheckReport>
 }

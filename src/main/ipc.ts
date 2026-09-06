@@ -10,17 +10,30 @@ import type {
   Platform,
   ScanRequest,
   ScanResult,
-  SearchResponse
+  SearchResponse,
+  SelfCheckReport,
+  SelfCheckRequest
 } from '@shared/types'
 import { normalizeSearchRequest } from '@shared/validators'
 import type { SessionLibrary } from './library'
+import type { FileSystemAccess } from './scanner/fsAccess'
 import { revealInFolder } from './security'
+import { readBuildEvidence, readDependencyEvidence } from './selfCheck/evidence'
+import type { SecurityMonitor } from './selfCheck/monitor'
+import { buildSelfCheckReport } from './selfCheck/report'
 
 export interface IpcContext {
   library: SessionLibrary
   getWindow: () => BrowserWindow | null
   platform: Platform
   sampleDataAvailable: boolean
+  /** 护栏装上时返回的那个监视器 —— 自检报告里的拦截计数从它来。 */
+  securityMonitor: SecurityMonitor
+  /** 构建期证据所在目录；开发机上没跑过 `pnpm evidence` 时是 null。 */
+  evidenceDir: string | null
+  isDev: boolean
+  /** 读证据 JSON 用的文件访问；与 library 共用同一个实例。 */
+  fs: FileSystemAccess
 }
 
 const EXPORT_FILTERS: Record<ExportRequest['format'], Array<{ name: string; extensions: string[] }>> = {
@@ -177,5 +190,34 @@ export function registerIpcHandlers(context: IpcContext): void {
 
   ipcMain.handle(IPC.revealInFolder, (_event, targetPath: string, baseDir?: string | null) =>
     revealInFolder(targetPath, baseDir)
+  )
+
+  ipcMain.handle(
+    IPC.selfCheck,
+    async (_event, request?: SelfCheckRequest): Promise<SelfCheckReport> => {
+      // 先授权、再读证据，顺序不能倒：从用户点下按钮到授权生效之间的那段时间
+      // 要尽量短。读两个 JSON 是毫秒级的事，但排在授权前面就等于白花掉
+      // 那 10 秒窗口预算的一部分。
+      const probeArm =
+        typeof request?.armProbe === 'string'
+          ? context.securityMonitor.armProbe(request.armProbe)
+          : null
+
+      const [build, dependencies] = await Promise.all([
+        readBuildEvidence(context.fs, context.evidenceDir),
+        readDependencyEvidence(context.fs, context.evidenceDir)
+      ])
+
+      // 这里不 try/catch：证据读取器已经把文件层面的岔子变成了 issues（它不抛），
+      // 真能冒到这儿的只剩编程错误——那种东西该响，不该被静默成一份空报告。
+      return buildSelfCheckReport({
+        monitor: context.securityMonitor.snapshot(),
+        build: build.evidence,
+        dependencies: dependencies.evidence,
+        evidenceIssues: [...build.issues, ...dependencies.issues],
+        isDev: context.isDev,
+        probeArm
+      })
+    }
   )
 }

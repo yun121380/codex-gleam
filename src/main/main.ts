@@ -34,6 +34,24 @@ function resolveSampleDir(): string | null {
 }
 
 /**
+ * 构建期证据（`build-evidence.json` 与 `dependency-tree.json`）所在的目录。
+ *
+ * 开发路径**不是**多余的：开发机上跑过 `pnpm evidence` 之后那两份 JSON 就在
+ * `build/generated/` 里，那时照实显示比硬说「开发模式没有」更诚实 ——
+ * 「开发模式」不等于「一定没有」。
+ */
+function resolveEvidenceDir(): string | null {
+  const candidates = app.isPackaged
+    ? [join(process.resourcesPath, 'generated')]
+    : [join(app.getAppPath(), 'build', 'generated'), join(process.cwd(), 'build', 'generated')]
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+/**
  * 开发时的窗口图标。
  *
  * 打包后任务栏用的是 exe 自带的图标（electron-builder 从 build/icon.png 生成），
@@ -105,13 +123,17 @@ async function bootstrap(): Promise<void> {
 
   await library.init()
 
-  applySessionSecurity(session.defaultSession, { isDev, devServerUrl })
+  const securityMonitor = applySessionSecurity(session.defaultSession, { isDev, devServerUrl })
 
   registerIpcHandlers({
     library,
     getWindow: () => mainWindow,
     platform: process.platform as Platform,
-    sampleDataAvailable: resolveSampleDir() !== null
+    sampleDataAvailable: resolveSampleDir() !== null,
+    securityMonitor,
+    evidenceDir: resolveEvidenceDir(),
+    isDev,
+    fs: nodeFileSystem
   })
 
   // 去掉默认菜单：它包含"访问 Electron 官网"之类的外链。

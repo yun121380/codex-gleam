@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, FolderOpen, Shield } from 'lucide-react'
+import { Check, FolderOpen, Shield, ShieldCheck } from 'lucide-react'
 import { PRIVACY_POINTS } from '@shared/constants'
 import type { PrivacyNotice } from '@shared/types'
 import { Button, Card } from '../components/ui'
@@ -83,6 +83,24 @@ export function PrivacyPage(): React.JSX.Element {
             ，任何情况下都不会重新执行 —— 代码里根本没有引入执行命令的能力，
             并且有一条自动化测试专门检查这一点。
           </p>
+        </Card>
+
+        {/*
+          这一整页都是"我们说我们做了什么"。这张卡是它唯一的出口：
+          别信这一页写的，去看这次运行真的算出来的数。
+        */}
+        <Card className="mt-3">
+          <h2 className="text-[13.5px] font-semibold text-ink">不用信这一页写的</h2>
+          <p className="mt-1.5 text-[12.5px] leading-relaxed text-ink-soft">
+            上面每一句都是文字。自检页上的每个数字都来自这次运行本身 ——
+            实际被拦下来的请求、此刻真正生效的安全策略、这个界面能调用的全部能力，
+            都在那里列着，你还可以随手给一个地址让它当场试一次。
+          </p>
+          <div className="mt-3">
+            <Button size="sm" icon={ShieldCheck} onClick={() => actions.setView('self-check')}>
+              去看这次运行的实际数据
+            </Button>
+          </div>
         </Card>
 
         <div className="mt-6">

@@ -5,7 +5,8 @@ import type {
   ExportRequest,
   ScanProgress,
   ScanRequest,
-  SearchRequest
+  SearchRequest,
+  SelfCheckRequest
 } from '@shared/types'
 
 /**
@@ -47,5 +48,7 @@ export const gleamApi: GleamApi = {
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke(IPC.settingsUpdate, patch),
 
   revealInFolder: (targetPath: string, baseDir?: string | null) =>
-    ipcRenderer.invoke(IPC.revealInFolder, targetPath, baseDir ?? null)
+    ipcRenderer.invoke(IPC.revealInFolder, targetPath, baseDir ?? null),
+
+  readSelfCheck: (request?: SelfCheckRequest) => ipcRenderer.invoke(IPC.selfCheck, request)
 }
