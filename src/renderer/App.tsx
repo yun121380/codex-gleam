@@ -16,6 +16,7 @@ import { cx } from './lib/format'
 import { useApp, type AppView } from './hooks/useAppStore'
 import { PrivacyPage } from './pages/PrivacyPage'
 import { ScanPage } from './pages/ScanPage'
+import { SelfCheckPage } from './pages/SelfCheckPage'
 import { SessionsPage } from './pages/SessionsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { StatsPage } from './pages/StatsPage'
@@ -79,12 +80,24 @@ export function App(): React.JSX.Element {
               <Search size={17} />
               扫描
             </button>
-            <span
-              title="本应用完全离线运行，所有网络请求都被拦截"
-              className="mb-1 flex h-7 w-7 items-center justify-center rounded-lg text-file"
+            {/*
+              这个徽标从前是个 <span>，挂着一句"完全离线运行"的纯承诺，点它没有任何反应。
+              现在它是通往证据的入口：点进去看的是这次运行真实的拦截计数、真实生效的
+              安全策略、以及此刻渲染进程能调用的全部能力 —— 一句承诺换成一组可核对的数。
+            */}
+            <button
+              type="button"
+              title="完全离线运行 —— 点开看这次运行的实际数据"
+              onClick={() => actions.setView('self-check')}
+              className={cx(
+                'mb-1 flex h-7 w-7 items-center justify-center rounded-lg transition-colors',
+                view === 'self-check'
+                  ? 'bg-accent-soft text-accent-ink'
+                  : 'text-file hover:bg-raised'
+              )}
             >
               <WifiOff size={15} />
-            </span>
+            </button>
           </div>
         </nav>
 
@@ -99,6 +112,8 @@ export function App(): React.JSX.Element {
             <SettingsPage />
           ) : view === 'privacy' ? (
             <PrivacyPage />
+          ) : view === 'self-check' ? (
+            <SelfCheckPage />
           ) : (
             <SessionsPage />
           )}

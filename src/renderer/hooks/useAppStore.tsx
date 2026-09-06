@@ -30,7 +30,16 @@ import {
 } from '@shared/constants'
 import { shouldSearchFullText } from '../lib/searchNotice'
 
-export type AppView = 'welcome' | 'scanning' | 'sessions' | 'stats' | 'settings' | 'privacy'
+export type AppView =
+  | 'welcome'
+  | 'scanning'
+  | 'sessions'
+  | 'stats'
+  | 'settings'
+  | 'privacy'
+  // 自检不在主导航里：它是「想核对的时候去看一眼」，不是日常操作。
+  // 入口挂在那个 WifiOff 徽标上和隐私页里。
+  | 'self-check'
 
 /**
  * 当前打开的会话里，那些命中落在哪几步上。

@@ -1,6 +1,12 @@
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { app, shell, type BrowserWindow, type Session, type WebContents } from 'electron'
+import { createSecurityMonitor, type SecurityMonitor } from './selfCheck/monitor'
+// 这两个常量住在 `securityPolicy.ts`，因为本文件顶上这句 `from 'electron'` 会传染：
+// 自检报告的组装是个纯函数，它引用常量不该顺带把 electron 拖进测试链。
+// **故意不 re-export** —— 留一条 `security.ts` 也能拿到常量的路，就等于留了一个
+// 让人无意中把 electron 拖回去的入口，而 typecheck 抓不到这种事。
+import { PRODUCTION_CSP, TLS_UNTRUSTED_VERDICT } from './securityPolicy'
 
 /**
  * 安全与"完全离线"的集中实现。
@@ -31,7 +37,7 @@ function devOrigins(devServerUrl?: string): string[] {
   }
 }
 
-function isRequestAllowed(url: string, options: SecurityOptions): boolean {
+export function isRequestAllowed(url: string, options: SecurityOptions): boolean {
   let parsed: URL
   try {
     parsed = new URL(url)
@@ -51,24 +57,37 @@ function isRequestAllowed(url: string, options: SecurityOptions): boolean {
   return false
 }
 
-/** 生产环境的 CSP（与 index.html 里注入的一致，这里再加一道响应头）。 */
-const PRODUCTION_CSP =
-  "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+/**
+ * 给 session 装上护栏，并返回一个观测这些护栏工作结果的监视器。
+ *
+ * 这一版只**加观测**，判据一个字符都没动：`isRequestAllowed` 的判断、
+ * `onBeforeRequest` 的回调结果、TLS 验证器的返回值，都还是从前那些。
+ */
+export function applySessionSecurity(
+  session: Session,
+  options: SecurityOptions
+): SecurityMonitor {
+  const monitor = createSecurityMonitor({
+    isAllowed: (url) => isRequestAllowed(url, options)
+  })
 
-export function applySessionSecurity(session: Session, options: SecurityOptions): void {
   // 1. 拦截所有出网请求。
   session.webRequest.onBeforeRequest((details, callback) => {
     if (isRequestAllowed(details.url, options)) {
       callback({ cancel: false })
       return
     }
+    // console.warn 留着：终端里那一行对开发者仍然有用，而且它是这个文件最原始的证据。
+    // 监视器只是在同一个位置多记一份，好让界面也看得见。
     console.warn('[安全] 已拦截网络请求：', details.url)
+    monitor.noteBlocked(details.url)
     callback({ cancel: true })
   })
 
   // 2. 生产环境补一道 CSP 响应头。
   if (!options.isDev) {
     session.webRequest.onHeadersReceived((details, callback) => {
+      monitor.noteCspHeader()
       callback({
         responseHeaders: {
           ...details.responseHeaders,
@@ -86,8 +105,11 @@ export function applySessionSecurity(session: Session, options: SecurityOptions)
 
   // 4. 任何 TLS 连接都直接判为不可信 —— 本应用本来就不该发起它们。
   session.setCertificateVerifyProc((_request, callback) => {
-    callback(-3)
+    monitor.noteTlsCheck()
+    callback(TLS_UNTRUSTED_VERDICT)
   })
+
+  return monitor
 }
 
 /** 对每个 webContents 生效的导航限制。 */
