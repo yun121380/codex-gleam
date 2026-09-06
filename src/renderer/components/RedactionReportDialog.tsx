@@ -1,8 +1,18 @@
 import { useEffect } from 'react'
 import { ArrowRight, Shield, ShieldOff, X } from 'lucide-react'
-import { REDACTION_PLACEHOLDER, REDACTION_REPORT_MAX_KEPT } from '@shared/constants'
-import type { RedactionHit, RedactionReport, RedactionRuleGroup } from '@shared/types'
-import { keptReasonLabel, ruleHint, ruleLabel } from '../lib/redactionLabels'
+import {
+  REDACTION_PLACEHOLDER,
+  REDACTION_REPORT_MAX_KEPT,
+  REDACTION_RESIDUAL_MIN_LENGTH,
+  REDACTION_RESIDUAL_TOP
+} from '@shared/constants'
+import type {
+  RedactionHit,
+  RedactionReport,
+  RedactionResidual,
+  RedactionRuleGroup
+} from '@shared/types'
+import { keptReasonLabel, residualShapeLabel, ruleHint, ruleLabel } from '../lib/redactionLabels'
 import { Button, Spinner } from './ui'
 
 /** 定位与跳转这一对，三层组件都要用，单独拎出来省得一路往下抄参数。 */
@@ -108,10 +118,10 @@ export function RedactionReportDialog({
 }
 
 /**
- * 两段：打掉了什么、什么被判为不是密钥。
+ * 三段：打掉了什么、可能漏了什么、什么被判为不是密钥。
  *
- * 中间不放占位块 —— B2 的残留排序进来时它自己会占一段，现在摆个空框只是在承诺
- * 一件还没做的事。
+ * 中间那一段是 B2 补上的：前后两段说的都是规则**跑到过**的地方，而规则压根没匹配上
+ * 的那些高熵长串，恰恰是唯一有可能带着真密钥进到分享产物里的东西。
  */
 function ReportBody({
   report,
@@ -161,8 +171,147 @@ function ReportBody({
         )}
       </section>
 
+      <ResidualSection
+        report={report}
+        locateEvent={locateEvent}
+        onJump={onJump}
+        onClose={onClose}
+      />
+
       <KeptSection report={report} />
     </>
+  )
+}
+
+/**
+ * 中间那一段：**可能漏了什么**。
+ *
+ * 语气是这一段最要紧的东西，所以它不是告警 —— 没有红色、没有感叹号、没有「发现 N 个
+ * 风险」。高熵检测的天然结局是淹没在噪音里，一个「检出 400 条可疑」的面板等于没有
+ * 面板；所以这里没有阈值、没有告警色，只有一个按可疑度降序的定长列表：从最上面看
+ * 起，看到不像了就停。
+ *
+ * 空的时候也不能说「很干净」。这个列表空只说明没有够长的高熵片段，不说明没漏东西，
+ * 把它读成体检合格是这一段最坏的用法。
+ */
+function ResidualSection({
+  report,
+  locateEvent,
+  onJump,
+  onClose
+}: { report: RedactionReport } & JumpProps): React.JSX.Element {
+  return (
+    <section className="mt-4 border-t border-line pt-3">
+      <SectionHead title="可能漏了什么" count={`${report.residualsTotal} 个片段`} />
+      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-faint">
+        这些是打码规则没有匹配上的高熵长串。它不是告警，只是一个排序：按可疑度从高到低
+        最多列 {REDACTION_RESIDUAL_TOP} 条，看到不像了就可以停。
+      </p>
+      {report.residualsPruned ? (
+        /*
+         * 撞上限之后，「一共有多少个不同片段」就不再是可知的了 —— 要精确回答它得把见
+         * 过的每一个都记住，而那正是上限想避免的事。所以这里换一句话说，而不是把一个
+         * 算不准的总数说得像准的。
+         */
+        <p className="mt-0.5 text-[11.5px] leading-relaxed text-ink-faint">
+          片段太多，只拿最可疑的一批参与了排名 —— 上面那个数是参与排名的条数，不是会话
+          里的全部。
+        </p>
+      ) : null}
+      {report.residuals.length === 0 ? (
+        <div className="mt-1.5 rounded-lg border border-line bg-canvas px-3 py-2.5">
+          <p className="text-[12.5px] text-ink">
+            没有找到 {REDACTION_RESIDUAL_MIN_LENGTH} 字符以上的高熵片段。
+          </p>
+          {/*
+           * 这一句是这一段的诚实底线，不许省：列表空只说明这一种形状的东西没找到，
+           * 不说明这个会话没漏东西。
+           */}
+          <p className="mt-0.5 text-[11.5px] leading-relaxed text-ink-faint">
+            这不等于没漏东西 —— 短的、或者混在正常文字里的，这一段看不见。
+          </p>
+        </div>
+      ) : (
+        <ul className="mt-1.5 space-y-1">
+          {report.residuals.map((residual) => (
+            <li key={residual.text}>
+              <ResidualRow
+                residual={residual}
+                locateEvent={locateEvent}
+                onJump={onJump}
+                onClose={onClose}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+/**
+ * 一条残留。这里显示的是**原文** —— 这一点和上面那一段正好相反。
+ *
+ * 理由不同：命中报告里的东西已经被打掉了，回显原值等于把打掉的东西又端出来；残留本来
+ * 就没被打码，此刻已经明明白白躺在时间线上，面板把它遮起来是自欺。唯一被改写过的是
+ * 用户主目录 —— 那件事在 `auditSession` 里做完了，这一层拿到的 `text` 已经是能显示的
+ * 样子。
+ *
+ * 分数徽标只是个数，不上颜色深浅：一上色它就又变成告警了。
+ */
+function ResidualRow({
+  residual,
+  locateEvent,
+  onJump,
+  onClose
+}: { residual: RedactionResidual } & JumpProps): React.JSX.Element {
+  const at = residual.eventId === null ? null : locateEvent(residual.eventId)
+  // 形态说明只在被降权时出现 —— `shape` 为 null 就是「没落在任何已知噪音形态里」，
+  // 那正是没有话要补的情况。
+  const notes = [
+    residual.shape !== null ? `看起来像${residualShapeLabel(residual.shape)}（已降权）` : null,
+    residual.length > residual.text.length ? `共 ${residual.length} 字符，只显示开头` : null
+  ].filter((note): note is string => note !== null)
+
+  const body = (
+    <>
+      <span className="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[11px] text-ink-soft tabular-nums">
+        {residual.score}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block font-mono text-[11.5px] leading-relaxed break-all text-ink-soft">
+          {residual.text}
+        </span>
+        {notes.length > 0 ? (
+          <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-faint">
+            {notes.join(' · ')}
+          </span>
+        ) : null}
+      </span>
+      {/* 出现次数只在大于 1 时说 —— 「1 处」是一句不带信息的话。 */}
+      {residual.count > 1 ? (
+        <span className="shrink-0 text-[11.5px] text-ink-faint tabular-nums">
+          {residual.count} 处
+        </span>
+      ) : null}
+    </>
+  )
+
+  if (at === null) return <div className={SAMPLE_SHELL}>{body}</div>
+
+  return (
+    <button
+      type="button"
+      title="跳到这一步"
+      onClick={() => {
+        onJump(at)
+        onClose()
+      }}
+      className={`${SAMPLE_SHELL} transition-colors hover:bg-raised`}
+    >
+      {body}
+      <ArrowRight size={11} className="mt-1 shrink-0 text-ink-faint" />
+    </button>
   )
 }
 

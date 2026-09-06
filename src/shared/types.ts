@@ -536,6 +536,73 @@ export interface RedactionKeptEntry {
   count: number
 }
 
+/**
+ * 一个高熵片段**长得像**什么。
+ *
+ * 这十种形态是「已知的排除形态」，落进任何一种都会被乘一个小于 1 的系数压下去，
+ * 但**一条都不会被丢掉** —— 真密钥恰好长得像 UUID 的时候，降权只是把它排后面，
+ * 删除是把它彻底藏起来，而藏起来的那一条正是这一段存在的全部理由。
+ *
+ * 写成联合类型而不是 string，是为了让渲染层那张 `Record<ResidualShape, string>`
+ * 成为编译期的穷尽检查：加了第十一种形态却忘了配中文说法，`pnpm typecheck` 直接红。
+ */
+export type ResidualShape =
+  /** 40 位（或 7—64 位）纯十六进制：git 提交号。 */
+  | 'git-sha'
+  /** `sha256-` / `sha384-` / `sha512-` 开头：锁文件里的完整性校验值。 */
+  | 'integrity-hash'
+  /** 标准 8-4-4-4-12。 */
+  | 'uuid'
+  /** 含 `/` 且不止一段：POSIX 路径。Windows 路径被分词器切碎，到不了这里。 */
+  | 'path'
+  /** 只有数字和 `.`、`,`、`_`、`-`：时间戳、版本号、长数列。 */
+  | 'numeric'
+  /** 全小写加连接符：minified 标识符、长包名。 */
+  | 'lower-words'
+  /** 点分的大小写混排标识符：`Microsoft.Extensions.Logging` 这类代码里的名字。 */
+  | 'dotted-name'
+  /** `call_` 开头：会话格式自己发的工具调用 id，不是任何人给的凭据。 */
+  | 'call-id'
+  /** 前面紧挨着 `base64,`：内嵌图片之类的 data URI。 */
+  | 'data-uri'
+  /** 超过 512 字符：真密钥没这么长，PEM 块另有 private-key-block 规则管。 */
+  | 'long-blob'
+
+/**
+ * 一条可疑残留：五个打码阶段全都没碰过它，但它看起来像密钥。
+ *
+ * 和 `RedactionHit` **方向相反**：这里存的是原文。理由不同于那边 ——
+ * 残留本来就没被打码，此刻已经明明白白躺在时间线上，面板把它遮起来是自欺。
+ * 唯一被改写过的是用户主目录，见 `library.auditSession`。
+ */
+export interface RedactionResidual {
+  /**
+   * 片段原文，最长 REDACTION_RESIDUAL_MAX_TEXT。
+   *
+   * `showFullPaths` 关着时，里面的主目录已经换成了 `~`。
+   */
+  text: string
+  /**
+   * 原文的**真实**长度，可能大于 `text.length`。
+   *
+   * 打分用的是这个数；两者不等时界面会说「共 N 字符，只显示开头」。
+   */
+  length: number
+  /** 可疑度，0—100 的整数。整数是为了排序可复现：不比较浮点。 */
+  score: number
+  /** 落在哪种已知排除形态里。null 表示没落进任何一种，也就是没被降权。 */
+  shape: ResidualShape | null
+  /**
+   * 这个片段在整个会话里出现几次。
+   *
+   * 常常是 2 的倍数：同一个串在事件正文和 `raw` 原始数据里各算一次。
+   * 这是实话，不是重复计数的 bug。
+   */
+  count: number
+  /** 第一次出现在哪条事件上。来自会话标题或摘要时是 null。 */
+  eventId: string | null
+}
+
 export interface RedactionReport {
   sessionId: string
   /**
@@ -553,4 +620,21 @@ export interface RedactionReport {
   kept: RedactionKeptEntry[]
   /** kept 没列全（超过条数上限，或不同组合超过 REDACTION_REPORT_MAX_KEPT_KEYS）。 */
   keptTruncated: boolean
+  /**
+   * 可疑残留，按 score 降序、同分按 text 码点升序，最多 REDACTION_RESIDUAL_TOP 条。
+   *
+   * 这**不是**告警列表：里面没有阈值，短是因为固定只列这么多条。
+   * `totalHits` 也不含它们 —— 残留不是命中，算进去会让「打掉了 N 处」变成假话。
+   */
+  residuals: RedactionResidual[]
+  /** 排名表里不同片段的条数。`residualsPruned` 为 false 时它就是精确总数。 */
+  residualsTotal: number
+  /**
+   * 排名表撞过上限，真实的不同片段比 `residualsTotal` 多。
+   *
+   * 想给出精确总数得把见过的每个片段都记住，而那正是上限要避免的开销。
+   * 所以撞上限时界面换一句话说，而不是把一个算不准的数说得像准的。
+   * 前 20 条**不受影响**，依然是精确的前 20 条 —— 论证见 `report.ts` 的剪枝那一段。
+   */
+  residualsPruned: boolean
 }

@@ -18,6 +18,7 @@ import {
   valueKeptReason
 } from './patterns'
 import { scopedTo, type RedactionSink } from './report'
+import { lookBehind, scoreResidual, tokenize } from './residual'
 
 /**
  * 打码。原则是"宁可多打一点，也不要漏掉密钥"，但同时避免把
@@ -93,6 +94,26 @@ function emitHits(text: string, pending: readonly PendingHit[], sink: RedactionS
 /** 键名敏感、整个值被换掉的那几处没有「周围的文本」可切，只能合成一段。 */
 function synthesizeContext(keyName: string): string {
   return `${keyName}: ${REDACTION_PLACEHOLDER}`
+}
+
+/**
+ * 扫一遍终稿，把「五个阶段都没碰过、但看起来像密钥」的片段报上去。
+ *
+ * 位置只能是这里 —— `text` 已经是终稿的地方。往前挪一个阶段，后面阶段该打的码还没打，
+ * 被正确打掉的密钥就会以「可疑残留」的身份报出来，面板于是在这个工具**工作得最好**的
+ * 地方给出最错的话。这条约束有个现成的看门人：`tests/redaction/reportSecrets.test.ts`
+ * 把整份报告序列化之后搜那六个假密钥的本体，而 `residuals` 一进报告就落进它的搜索范围。
+ * 它保持绿色恰恰是因为残留来自打过码的文本。
+ *
+ * **没有阈值**：分数只用来排序，报上来的一条都不丢（见 residual.ts 的模块注释）。
+ * 也**没有**「跳过占位符」这个判断 —— `[已打码]` 里的方括号和中文都不在分词表内，
+ * 它压根不会成词。写一个永假的 `if` 只会让下一个人以为它在防什么。
+ */
+function emitResiduals(text: string, sink: RedactionSink): void {
+  for (const token of tokenize(text)) {
+    const { score, shape } = scoreResidual(token.text, lookBehind(text, token.at))
+    sink.residual({ text: token.text, length: token.text.length, score, shape })
+  }
 }
 
 export function redactText(input: string, sink?: RedactionSink): string {
@@ -203,6 +224,8 @@ export function redactText(input: string, sink?: RedactionSink): string {
   )
 
   if (sink !== undefined && pending.length > 0) emitHits(text, pending, sink)
+  // 同一道门：不传 sink 时这两行一行都不跑，`text` 从头到尾没被多读一次。
+  if (sink !== undefined) emitResiduals(text, sink)
 
   return text
 }
@@ -348,8 +371,9 @@ export function redactSummary<T extends SessionSummary>(summary: T, sink?: Redac
 /**
  * 会话级打码。
  *
- * 每条事件都套一层 `scopedTo`，好让命中报告说得出「这处在哪条事件上」；
- * 会话标题与警告不属于任何一条事件，它们的 `eventId` 就是 `null`。
+ * 每条事件都套一层 `scopedTo`，好让命中与残留都说得出「这处在哪条事件上」；
+ * 会话标题与警告不属于任何一条事件，它们的 `eventId` 就是 `null` —— 摘要那一路
+ * 走的也是 `redactText`，所以残留会自动被收进来，不需要为它多写一条分支。
  */
 export function redactSession(session: CodexSession, sink?: RedactionSink): CodexSession {
   return {

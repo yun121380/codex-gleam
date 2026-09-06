@@ -1,5 +1,5 @@
 /**
- * 报告里那些规则名与排除理由的中文说法。
+ * 报告里那些规则名、排除理由与残留形态的中文说法。
  *
  * 放在 lib 里而不是写进 JSX，图的是两件事：这些说法能单测（每一条都得非空、互不
  * 相同），以及**没有兜底文案**。一个认不出规则就回「未知规则」的标签函数，会让
@@ -9,8 +9,12 @@
  * 所以做法是：五条固定规则穷举，`known-secret:` 那一族按模式名拼出来。
  * `KNOWN_SECRET_PATTERNS` 将来加一条，标签自动变成「已知格式的密钥 · 新名字」，
  * 解释退成一句仍然为真的话 —— 不假装认识它。
+ *
+ * 排除理由与残留形态比规则名更严一层：它们都是联合类型，两张表于是写成
+ * `Record<联合类型, string>` —— 漏配一条是 `pnpm typecheck` 直接红，连"认不出来"
+ * 这条路都没有，不用等界面上冒出一句「未知形态」才发现。
  */
-import type { KeptReason } from '@shared/types'
+import type { KeptReason, ResidualShape } from '@shared/types'
 
 /** `known-secret:openai` 里冒号连着的那一半。 */
 const KNOWN_SECRET_PREFIX = 'known-secret:'
@@ -96,4 +100,29 @@ const KEPT_REASON_LABELS: Record<KeptReason, string> = {
   'value-too-short': '值不到 4 个字符，短到不可能是密钥（源码里的 password: str）',
   'value-is-template': '值是占位符或模板（<your-key>、{{TOKEN}}）',
   'value-not-secret': '值是 true / false / 数字这类，本身不是秘密'
+}
+
+/**
+ * 一段残留「看起来像什么」。
+ *
+ * 这十种形态是**降权**的理由，不是丢掉它的理由 —— 说出来，用户才能反推一条为什么
+ * 排在那个位置，而不是面对一个不知从何而来的分数。所以每一句说的都是那个形态自己的
+ * 样子，而不是一句「已知的噪音」：认成 UUID 和认成提交号挨的是不同档的折扣，界面上
+ * 也就该是两句不同的话。
+ */
+export function residualShapeLabel(shape: ResidualShape): string {
+  return RESIDUAL_SHAPE_LABELS[shape]
+}
+
+const RESIDUAL_SHAPE_LABELS: Record<ResidualShape, string> = {
+  'git-sha': 'git 提交号',
+  'integrity-hash': '依赖锁文件的完整性校验值',
+  uuid: 'UUID',
+  path: '文件路径',
+  numeric: '纯数字',
+  'lower-words': '全小写的标识符',
+  'dotted-name': '点分的代码标识符',
+  'call-id': '工具调用 id',
+  'data-uri': '内嵌图片数据',
+  'long-blob': '超长的 base64 数据块'
 }

@@ -266,6 +266,14 @@ export class SessionLibrary {
           ...sample,
           maskedContext: maskHomePaths(sample.maskedContext, paths)
         }))
+      })),
+      // 残留是整份报告里**唯一**显示原文的一段（它本来就没被打码，遮起来是自欺）。
+      // 漏掉这一步，这个面板就成了全应用唯一一个漏出真实用户名的地方 —— 和上面防的是
+      // 同一类 bug，只是低了一层。分数是**洗之前**算的（可疑度不该被显示口径改变），
+      // 显示的是**洗之后**的。
+      residuals: report.residuals.map((residual) => ({
+        ...residual,
+        text: maskHomePaths(residual.text, paths)
       }))
     }
   }

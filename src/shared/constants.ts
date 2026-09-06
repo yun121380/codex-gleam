@@ -136,6 +136,59 @@ export const REDACTION_REPORT_MAX_KEPT = 30
 export const REDACTION_REPORT_MAX_KEPT_KEYS = 500
 
 /**
+ * 可疑残留的最小长度。
+ *
+ * 和 `shouldMaskValue` 的 4 差了五倍，这个不对称正是重点：那边手里有一个敏感
+ * **键名**当证据，`api_key = "1234"` 值得打码；这边什么证据都没有，只有一个裸串。
+ * 没有键名的时候把门槛放到 4，等于把日志里每个单词都变成「可疑残留」。
+ * 20 是常见密钥的下限 —— AWS access key id 正好 20 位。
+ */
+export const REDACTION_RESIDUAL_MIN_LENGTH = 20
+
+/**
+ * 长度得分打满的长度。
+ *
+ * 再长也不更可疑：超过这个数的东西里，锁文件哈希和 base64 数据块远多于密钥。
+ * 64 是 sha256 十六进制的长度，也差不多是各家密钥的上界。
+ */
+export const REDACTION_RESIDUAL_FULL_LENGTH = 64
+
+/**
+ * 熵得分打满的比特/字符。
+ *
+ * 随机 base64 的理论上限约 6；混合大小写与数字的真实密钥落在 4.5—5.5；
+ * 纯十六进制只有 4。门槛压在 4.5 才能把后者留在半分以下。
+ */
+export const REDACTION_RESIDUAL_FULL_ENTROPY = 4.5
+
+/**
+ * 面板上固定列几条。
+ *
+ * 这是个**定长**，不是阈值 —— 列表短是因为只列这么多，不是因为筛掉了谁。
+ * 高熵检测的天然结局是淹没在噪音里，「检出 400 条可疑」的面板等于没有面板；
+ * 定长排序列表在任何精确率下都可用：从最上面看起，看到不像了就停。
+ */
+export const REDACTION_RESIDUAL_TOP = 20
+
+/**
+ * 单条残留最多存多少字符。
+ *
+ * 一张截图的 data URI 有几十万字符：既不能整条存进报告，也不该整条渲染到界面上。
+ * 超长的只存开头，真实长度另用一个数字带着。256 够看出「这是什么东西」。
+ */
+export const REDACTION_RESIDUAL_MAX_TEXT = 256
+
+/**
+ * 排名表最多存多少个不同片段，以及撞上限时剪到几条。
+ *
+ * 这两个数一起兑现了风险表里「残留检测超时」那一行，但**没有用挂钟** —— 挂钟让
+ * 输出随机器变快变慢，和「排序稳定且可复现」直接冲突。剪枝之后前 20 条依然是
+ * 精确的前 20 条（论证见 `main/redaction/report.ts`），前提是留存数远大于 20。
+ */
+export const REDACTION_RESIDUAL_MAX_KEYS = 2000
+export const REDACTION_RESIDUAL_PRUNE_TO = 1000
+
+/**
  * 敏感字段名。只要 JSON 的键名或文本中的标签命中这些词，其值就会被打码。
  * 规格明确要求的：API Key / Token / Password / Secret / Authorization / Cookie。
  */

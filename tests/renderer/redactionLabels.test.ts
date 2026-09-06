@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { keptReasonLabel, ruleHint, ruleLabel } from '../../src/renderer/lib/redactionLabels'
+import {
+  keptReasonLabel,
+  residualShapeLabel,
+  ruleHint,
+  ruleLabel
+} from '../../src/renderer/lib/redactionLabels'
 import { KNOWN_SECRET_PATTERNS } from '../../src/main/redaction/patterns'
-import type { KeptReason } from '../../src/shared/types'
+import type { KeptReason, ResidualShape } from '../../src/shared/types'
 
 /**
  * 面板上那些说法。
@@ -27,6 +32,26 @@ const FIVE_REASONS: readonly KeptReason[] = [
   'value-too-short',
   'value-is-template',
   'value-not-secret'
+]
+
+/**
+ * 十种残留形态。
+ *
+ * 写成 `readonly ResidualShape[]` 字面量而不是从别处导一张表：将来联合类型加了第
+ * 十一种，`Record<ResidualShape, string>` 先在 typecheck 里红，这条数组再补上那一项
+ * —— 两道关卡的顺序刚好是「先发现漏配，再补说法」。
+ */
+const TEN_SHAPES: readonly ResidualShape[] = [
+  'git-sha',
+  'integrity-hash',
+  'uuid',
+  'path',
+  'numeric',
+  'lower-words',
+  'dotted-name',
+  'call-id',
+  'data-uri',
+  'long-blob'
 ]
 
 describe('六种规则都有说法，而且互不相同', () => {
@@ -92,5 +117,23 @@ describe('五种排除理由', () => {
       expect(label, FIVE_REASONS[at]).not.toContain(FIVE_REASONS[at]!)
     }
     expect(new Set(labels).size).toBe(FIVE_REASONS.length)
+  })
+})
+
+describe('十种残留形态', () => {
+  it('每一条都有说法，互不相同', () => {
+    const labels = TEN_SHAPES.map(residualShapeLabel)
+    for (const [at, label] of labels.entries()) {
+      expect(label.trim(), TEN_SHAPES[at]).not.toBe('')
+    }
+    // 两种形态共用一句说法，等于面板上有一行永远解释不清自己为什么被降权。
+    expect(new Set(labels).size).toBe(TEN_SHAPES.length)
+  })
+
+  it('形态 id 本身不出现在给用户看的说法里', () => {
+    // 跟规则名那条同一个理由：`git-sha` 是代码里的标识符，不是中文界面上的话。
+    for (const shape of TEN_SHAPES) {
+      expect(residualShapeLabel(shape), shape).not.toContain(shape)
+    }
   })
 })

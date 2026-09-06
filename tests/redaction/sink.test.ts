@@ -1,16 +1,25 @@
 /**
  * 遥测 sink 的行为契约。
  *
- * 四件事，缺一件这个面板就不能信：
+ * 五件事，缺一件这个面板就不能信：
  *   1. 不传 sink 时返回值逐字节相同 —— 打码是正事，审计是搭车的；
  *   2. 六种 rule、五种 KeptReason 都真的报得出来，不是写在类型里就算有；
  *   3. 报告里没有原值，哪怕两条规则在同一处叠着打了两次码；
- *   4. eventId 落到了每条事件上，不属于任何一条事件的那几处是 null。
+ *   4. eventId 落到了每条事件上，不属于任何一条事件的那几处是 null；
+ *   5. 残留排名表：去重计数、排序、截断、以及 eventId 与 kept 相反的那条待遇。
  */
 import { describe, expect, it } from 'vitest'
-import { createCollector, type RedactionCollector } from '../../src/main/redaction/report'
+import {
+  createCollector,
+  scopedTo,
+  type RedactionCollector,
+  type ResidualInput
+} from '../../src/main/redaction/report'
 import { redactDeep, redactSession, redactText } from '../../src/main/redaction/redact'
-import { REDACTION_PLACEHOLDER } from '../../src/shared/constants'
+import {
+  REDACTION_PLACEHOLDER,
+  REDACTION_RESIDUAL_MAX_TEXT
+} from '../../src/shared/constants'
 import type {
   CodexSession,
   KeptReason,
@@ -223,5 +232,92 @@ describe('eventId 落到每条事件上', () => {
 
     const rootHits = samples.filter((sample) => sample.eventId === null)
     expect(rootHits.some((hit) => hit.rule === 'key-value' && hit.keyName === 'password')).toBe(true)
+  })
+})
+
+describe('残留排名表', () => {
+  /** 分数由打分模块给，收集器只负责收 —— 所以这里直接喂分数，不绕真会话。 */
+  function input(text: string, score: number): ResidualInput {
+    return { text, length: text.length, score, shape: null }
+  }
+
+  it('同一个片段报三次是一条，count 累加', () => {
+    const result = collectReport((collector) => {
+      for (let i = 0; i < 3; i += 1) collector.residual(input('Kq7mZr2vT9wPbN4sXyLd', 63))
+    })
+
+    expect(result.residuals).toHaveLength(1)
+    expect(result.residuals[0]?.count).toBe(3)
+    expect(result.residualsTotal).toBe(1)
+    expect(result.residualsPruned).toBe(false)
+  })
+
+  it('分数高的排前面，同分按码点升序', () => {
+    const result = collectReport((collector) => {
+      collector.residual(input('Zq7mZr2vT9wPbN4sXyLd', 10))
+      collector.residual(input('Mq7mZr2vT9wPbN4sXyLd', 50))
+      collector.residual(input('Aq7mZr2vT9wPbN4sXyLd', 10))
+    })
+
+    expect(result.residuals.map((entry) => entry.text)).toEqual([
+      'Mq7mZr2vT9wPbN4sXyLd',
+      'Aq7mZr2vT9wPbN4sXyLd',
+      'Zq7mZr2vT9wPbN4sXyLd'
+    ])
+  })
+
+  it('scopedTo 给残留盖上 eventId，给 kept 不盖 —— 两者的差别在这里是显式的', () => {
+    const collector = createCollector()
+    const scoped = scopedTo(collector, 'evt-7')
+    scoped.residual(input('Kq7mZr2vT9wPbN4sXyLd', 63))
+    scoped.kept('author', 'name-not-matched')
+    const result = collector.summarize('sink-test', true)
+
+    // 残留可点击定位，所以必须知道它在第几步。
+    expect(result.residuals[0]?.eventId).toBe('evt-7')
+    // kept 报的是键名统计，「author 在三十条事件里各出现一次」报三十条毫无用处。
+    expect(result.kept[0]).toEqual({ keyName: 'author', reason: 'name-not-matched', count: 1 })
+    expect(result.kept[0] && 'eventId' in result.kept[0]).toBe(false)
+  })
+
+  it('没包 scopedTo 的那一路 eventId 是 null，重复出现时记第一次那条', () => {
+    const collector = createCollector()
+    collector.residual(input('Aq7mZr2vT9wPbN4sXyLd', 63))
+    scopedTo(collector, 'evt-1').residual(input('Kq7mZr2vT9wPbN4sXyLd', 63))
+    scopedTo(collector, 'evt-2').residual(input('Kq7mZr2vT9wPbN4sXyLd', 63))
+    const result = collector.summarize('sink-test', true)
+
+    const anonymous = result.residuals.find((entry) => entry.text.startsWith('Aq7'))
+    const repeated = result.residuals.find((entry) => entry.text.startsWith('Kq7'))
+
+    expect(anonymous?.eventId).toBeNull()
+    expect(repeated?.count).toBe(2)
+    expect(repeated?.eventId).toBe('evt-1')
+  })
+
+  it('超长片段只存开头，length 仍是真实长度', () => {
+    const huge = 'iVBORw0KGgoAAAANSUhEUg'.repeat(200)
+    expect(huge.length).toBeGreaterThan(REDACTION_RESIDUAL_MAX_TEXT)
+
+    const result = collectReport((collector) => {
+      collector.residual({ text: huge, length: huge.length, score: 10, shape: 'data-uri' })
+    })
+
+    const entry = result.residuals[0]
+    expect(entry?.text).toHaveLength(REDACTION_RESIDUAL_MAX_TEXT)
+    expect(entry?.text).toBe(huge.slice(0, REDACTION_RESIDUAL_MAX_TEXT))
+    expect(entry?.length).toBe(huge.length)
+    expect(entry?.shape).toBe('data-uri')
+  })
+
+  it('开头相同的两个超长片段按开头去重 —— 同一张图的碎片正是这么处理的', () => {
+    const head = 'iVBORw0KGgoAAAANSUhEUg'.repeat(200)
+    const result = collectReport((collector) => {
+      collector.residual({ text: `${head}AAAA`, length: head.length + 4, score: 10, shape: null })
+      collector.residual({ text: `${head}BBBB`, length: head.length + 4, score: 10, shape: null })
+    })
+
+    expect(result.residuals).toHaveLength(1)
+    expect(result.residuals[0]?.count).toBe(2)
   })
 })

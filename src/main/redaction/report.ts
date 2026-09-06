@@ -1,14 +1,20 @@
 import {
   REDACTION_REPORT_MAX_KEPT,
   REDACTION_REPORT_MAX_KEPT_KEYS,
-  REDACTION_REPORT_MAX_SAMPLES
+  REDACTION_REPORT_MAX_SAMPLES,
+  REDACTION_RESIDUAL_MAX_KEYS,
+  REDACTION_RESIDUAL_MAX_TEXT,
+  REDACTION_RESIDUAL_PRUNE_TO,
+  REDACTION_RESIDUAL_TOP
 } from '@shared/constants'
 import type {
   KeptReason,
   RedactionHit,
   RedactionKeptEntry,
   RedactionReport,
-  RedactionRuleGroup
+  RedactionResidual,
+  RedactionRuleGroup,
+  ResidualShape
 } from '@shared/types'
 
 /**
@@ -20,6 +26,24 @@ import type {
  */
 
 /**
+ * 报一条可疑残留时给的东西。
+ *
+ * 比 `RedactionResidual` 少两个字段：`count` 是收集器数出来的，`eventId` 是
+ * `scopedTo` 盖上去的。扫描那一侧既不知道这个片段出现过几次，也不知道自己正在
+ * 处理哪条事件 —— 让它填这两个字段，就等于给每个调用点一次填错的机会。
+ */
+export interface ResidualInput {
+  /** 片段原文。超过 `REDACTION_RESIDUAL_MAX_TEXT` 的部分由收集器截掉。 */
+  text: string
+  /** 原文的真实长度。打分用的是这个数，所以它必须由调用方给。 */
+  length: number
+  score: number
+  shape: ResidualShape | null
+  /** 只有 `scopedTo` 填它。 */
+  eventId?: string
+}
+
+/**
  * 打码时顺路把「打了什么」和「什么没打」记下来的接收端。
  *
  * 所有 `redact*` 函数的 `sink` 参数都是可选的：不传时它们一行逻辑都不多走，
@@ -28,6 +52,8 @@ import type {
 export interface RedactionSink {
   hit(hit: RedactionHit): void
   kept(keyName: string, reason: KeptReason): void
+  /** 五个阶段都没碰过、但看起来像密钥的片段。**没有阈值**：报上来就都收。 */
+  residual(entry: ResidualInput): void
 }
 
 export interface RedactionCollector extends RedactionSink {
@@ -49,6 +75,15 @@ function byCodePoint(a: string, b: string): number {
   return 0
 }
 
+/**
+ * 残留的排名规则：分数降序，同分按片段本身的码点升序。
+ *
+ * 剪枝和最终排序共用它。两处各写一遍排序规则，是这份报告将来不可复现的最短路径。
+ */
+function byResidualRank(a: RedactionResidual, b: RedactionResidual): number {
+  return b.score - a.score || byCodePoint(a.text, b.text)
+}
+
 export function createCollector(): RedactionCollector {
   /**
    * 边分组边收，不先攒后分。
@@ -61,6 +96,41 @@ export function createCollector(): RedactionCollector {
   const kept = new Map<string, RedactionKeptEntry>()
   /** 不同的「键名 + 原因」组合超过上限，后来的没能进 Map。 */
   let keptOverflowed = false
+
+  /**
+   * 残留的排名表，键是**截断后**的片段原文。
+   *
+   * 上限管住内存，下面那段论证管住正确性 —— 两件事都不依赖机器有多快。这就是这一期
+   * 没有用挂钟超时的原因：挂钟让输出随机器变快变慢，和「排序稳定且可复现」直接打架。
+   */
+  const residuals = new Map<string, RedactionResidual>()
+  /** 进表的门槛。剪枝之前是 0，也就是「谁都能进」。只会涨，不会跌。 */
+  let floor = 0
+  /** 有片段因为门槛或剪枝被丢掉，真实的不同片段比表里的多。 */
+  let residualsPruned = false
+
+  /**
+   * 表满了就砍到 `REDACTION_RESIDUAL_PRUNE_TO`，并把门槛抬到留下的最后一名。
+   *
+   * **被丢掉的片段永远进不了前 20**，分两种情形：剪枝时砍掉的那些，排在留下的 1000 条
+   * 之后；门槛拒掉的那些，分数严格低于表里每一条（表里所有条目的分数都 ≥ `floor`）。
+   * 两种情形下都有 ≥ 1000 条排在它前面。
+   *
+   * 这个「1000 条」不会被后续剪枝稀释：每次剪枝只会用**排得更前**的新条目顶掉旧条目，
+   * 所以剪枝后留下的 1000 条，要么本来就在上一轮的留存集里，要么顶掉了留存集里的某一条
+   * （于是排得比那一条更前）。归纳下来，任何时刻表里都有 1000 条排在任何一个被丢者之前。
+   * 1000 > `REDACTION_RESIDUAL_TOP`，所以面板上那 20 条是**精确的**前 20 条，不是近似。
+   */
+  function pruneResiduals(): void {
+    const ranked = [...residuals.values()].sort(byResidualRank)
+    residuals.clear()
+    for (const entry of ranked.slice(0, REDACTION_RESIDUAL_PRUNE_TO)) {
+      residuals.set(entry.text, entry)
+    }
+    // 留下的最后一名就是新门槛。它只会涨：被砍掉的都排在它后面。
+    floor = ranked[REDACTION_RESIDUAL_PRUNE_TO - 1]?.score ?? floor
+    residualsPruned = true
+  }
 
   return {
     hit(hit: RedactionHit): void {
@@ -92,6 +162,31 @@ export function createCollector(): RedactionCollector {
       kept.set(key, { keyName, reason, count: 1 })
     },
 
+    residual(entry: ResidualInput): void {
+      // 超长片段按开头去重 —— 对同一张图切出来的碎片，这正是想要的效果。
+      const text = entry.text.slice(0, REDACTION_RESIDUAL_MAX_TEXT)
+      const existing = residuals.get(text)
+      if (existing !== undefined) {
+        // **先加计数，再谈门槛**：一个已经排上名的片段，不该因为门槛涨了就停止计数。
+        existing.count += 1
+        return
+      }
+      if (entry.score < floor) {
+        residualsPruned = true
+        return
+      }
+      residuals.set(text, {
+        text,
+        length: entry.length,
+        score: entry.score,
+        shape: entry.shape,
+        count: 1,
+        // 只记第一次见到它的那条事件：同一个片段出现在三条事件里时，跳到第一条更自然。
+        eventId: entry.eventId ?? null
+      })
+      if (residuals.size > REDACTION_RESIDUAL_MAX_KEYS) pruneResiduals()
+    },
+
     summarize(sessionId: string, redactEnabled: boolean): RedactionReport {
       const sortedGroups: RedactionRuleGroup[] = [...groups.entries()]
         .map(([rule, group]) => ({ rule, count: group.count, samples: group.samples }))
@@ -104,6 +199,8 @@ export function createCollector(): RedactionCollector {
           byCodePoint(a.reason, b.reason)
       )
 
+      const sortedResiduals = [...residuals.values()].sort(byResidualRank)
+
       let totalHits = 0
       for (const group of sortedGroups) totalHits += group.count
 
@@ -111,11 +208,16 @@ export function createCollector(): RedactionCollector {
         sessionId,
         redactEnabled,
         // 是所有 count 之和，不是 groups.length —— 后者是「有几条规则命中过」。
+        // 残留**不算**命中：把它加进来，「打掉了 N 处」就变成一句假话。
         totalHits,
         groups: sortedGroups,
         kept: sortedKept.slice(0, REDACTION_REPORT_MAX_KEPT),
         // 两种截断对用户是同一件事：「这里没列全」。
-        keptTruncated: keptOverflowed || sortedKept.length > REDACTION_REPORT_MAX_KEPT
+        keptTruncated: keptOverflowed || sortedKept.length > REDACTION_REPORT_MAX_KEPT,
+        residuals: sortedResiduals.slice(0, REDACTION_RESIDUAL_TOP),
+        // 表内条数，精确；「会话里一共有多少个不同片段」不可知，所以不给。
+        residualsTotal: sortedResiduals.length,
+        residualsPruned
       }
     }
   }
@@ -130,6 +232,10 @@ export function createCollector(): RedactionCollector {
  *
  * `kept` 原样转发，**不**挂事件 id：同一个 `author` 在三十条事件里各出现一次，
  * 报三十条毫无用处，报「`author` × 30」才有用。
+ *
+ * `residual` 相反，**要**挂事件 id：残留条目在面板上是可点击定位的，不知道它在第几步，
+ * 用户就只能拿着一个字符串在时间线上自己找。紧挨着的两个方法做了相反的事，这里说清
+ * 理由，否则一定会有人来「统一」它们。
  */
 export function scopedTo(sink: RedactionSink, eventId: string): RedactionSink {
   return {
@@ -138,6 +244,9 @@ export function scopedTo(sink: RedactionSink, eventId: string): RedactionSink {
     },
     kept(keyName: string, reason: KeptReason): void {
       sink.kept(keyName, reason)
+    },
+    residual(entry: ResidualInput): void {
+      sink.residual({ ...entry, eventId })
     }
   }
 }

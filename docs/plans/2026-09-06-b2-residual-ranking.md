@@ -19,7 +19,7 @@
 ## Global Constraints
 
 - **只做排序，不做告警。** 设计文档把这条的理由说透了：高熵检测的天然结局是淹没在噪音里，「检出 400 条可疑」的面板等于没有面板。所以这一段没有阈值、没有红色、没有「发现 N 个风险」的口气，只有一个定长列表——用户从最上面看起，看到不像了就停。落到实现上是一句可执行的话：**代码里不许出现「可疑度低于某个值就不算残留」的判断**。列表短是因为固定只列 20 条，不是因为筛掉了谁。
-- **排除只降权，不删除。** git 提交号、`sha512-` 锁文件哈希、UUID、长路径、data URI 里的 base64——这些形态各自乘一个小于 1 的系数，**一条都不丢掉**。真密钥恰好长得像 UUID 的时候，降权只是把它压下去，删除是把它彻底藏起来，而藏起来的那一条正是这个面板存在的全部理由。
+- **排除只降权，不删除。** git 提交号、`sha512-` 锁文件哈希、UUID、长路径、data URI 里的 base64、工具自己发的 `call_` 调用 id、点分的代码标识符——这些形态各自乘一个小于 1 的系数，**一条都不丢掉**。真密钥恰好长得像 UUID 的时候，降权只是把它压下去，删除是把它彻底藏起来，而藏起来的那一条正是这个面板存在的全部理由。
 - **残留条目显示原文。** 这一条和 B1 的命中报告**方向相反**，理由也不同：残留本来就没被打码，此刻已经明明白白躺在时间线上，面板把它遮起来是自欺。唯一的例外是用户主目录路径——`showFullPaths` 关着的时候全应用都在把它换成 `~`，残留这一段不能成为唯一一个漏出真实用户名的地方。
 - **扫描只能跑在终稿文本上。** 见 Architecture。这条约束有一个现成的看门人：`tests/redaction/reportSecrets.test.ts` 把整份报告序列化之后搜那六个假密钥的本体，而 `residuals` 一进 `RedactionReport` 就自动落进它的搜索范围。**它保持绿色恰恰是因为残留来自打过码的文本**——哪天有人把扫描挪到原文上，那个文件立刻红。所以这一期 `tests/redaction/reportSecrets.test.ts` **一个字符都不许改**：改它就是把这一期唯一的自动看门人拆掉。
 - **`tests/redaction/redact.test.ts`（38 条）与 `tests/redaction/maskPaths.test.ts`（8 条）继续一个字符都不许改。** B1 立的规矩在这一期照样成立，而且更容易验证：残留扫描既不读也不写 `text`，不传 sink 时它一行都不跑。
@@ -41,13 +41,13 @@
 | `src/main/redaction/report.ts` | 改：`RedactionSink` 加 `residual()`；收集器里带剪枝的去重表；`scopedTo` 转发并盖上 `eventId` |
 | `src/main/redaction/redact.ts` | 改：`redactText` 末尾多一次残留扫描，只在传了 sink 时跑 |
 | `src/main/library.ts` | 改：`hidePaths` 打开时把残留原文里的主目录也换成 `~` |
-| `src/renderer/lib/redactionLabels.ts` | 改：`residualShapeLabel`——八种形态的中文说法，仍然没有兜底文案 |
+| `src/renderer/lib/redactionLabels.ts` | 改：`residualShapeLabel`——十种形态的中文说法，仍然没有兜底文案 |
 | `src/renderer/components/RedactionReportDialog.tsx` | 改：两段之间插进中间那一段 |
 | `tests/redaction/residualScore.test.ts` | 新建：分词边界、熵、形态判定、打分的单调性 |
-| `tests/redaction/residualRanking.test.ts` | 新建：**验收**——真密钥排在八类噪音之上；降权不删除；剪枝后前 20 仍精确；两次跑结果一致 |
+| `tests/redaction/residualRanking.test.ts` | 新建：**验收**——真密钥排在十类噪音之上；降权不删除；剪枝后前 20 仍精确；两次跑结果一致 |
 | `tests/redaction/sink.test.ts` | 改：追加排名表与 `scopedTo` 的收集器层断言 |
-| `tests/renderer/redactionLabels.test.ts` | 改：八种形态都有说法，且互不相同 |
-| `tests/fixtures/redaction-residual.jsonl` | 新建：一条没被任何规则认出来的密钥 + 八类噪音各一份 |
+| `tests/renderer/redactionLabels.test.ts` | 改：十种形态都有说法，且互不相同 |
+| `tests/fixtures/redaction-residual.jsonl` | 新建：一条没被任何规则认出来的密钥 + 十类噪音各一份 |
 | `docs/design/2026-09-05-parity-and-shareability-design.md` | 改：风险表「残留检测超时」一行换成这一期真正采用的确定性办法 |
 
 ---
@@ -60,7 +60,7 @@
 
 另一件要在这里定死的事是**报告用一对字段而不是一个数**来说清规模：`residualsTotal` 是排名表里不同片段的条数（精确），`residualsPruned` 说的是「表撞过上限」。想给出一个精确的「会话里一共有多少个不同高熵片段」，得把见过的每一个都记住——那恰好是上限要避免的开销。与其编一个算不准的总数，不如让界面在撞上限时换一句话说。B1 的 `kept` 那一段是同一个标准的另一个形状：它连条数都给不出，所以它一个数字都不给。
 
-- [ ] **Step 1: 在 `src/shared/types.ts` 的 redaction 段加 `ResidualShape` 联合类型。** 八个成员：`git-sha` / `integrity-hash` / `uuid` / `path` / `numeric` / `lower-words` / `data-uri` / `long-blob`。写成联合而不是字符串，是为了让 `redactionLabels.ts` 里的 `Record<ResidualShape, string>` 成为编译期的穷尽检查——将来加第九种形态却忘了配中文说明，`pnpm typecheck` 直接红，不用靠谁记得回去改测试。
+- [ ] **Step 1: 在 `src/shared/types.ts` 的 redaction 段加 `ResidualShape` 联合类型。** 十个成员：`git-sha` / `integrity-hash` / `uuid` / `path` / `numeric` / `lower-words` / `dotted-name` / `call-id` / `data-uri` / `long-blob`。写成联合而不是字符串，是为了让 `redactionLabels.ts` 里的 `Record<ResidualShape, string>` 成为编译期的穷尽检查——将来加第十一种形态却忘了配中文说明，`pnpm typecheck` 直接红，不用靠谁记得回去改测试。其中 `dotted-name` 与 `call-id` 是 Task 6 Step 2 在真实数据上量出来之后补的：这份计划最初只列了八种，而那两族噪音**整批冒到了顶上**，正是 Step 2 写好的「那说明少了一种形态判定」这一条触发的（数字见 Task 6）。
 - [ ] **Step 2: 加 `RedactionResidual`。** 六个字段：`text`（原文；超长的只存开头，主目录路径可能被洗过）、`length`（原文的**真实**长度，可能大于 `text.length`——界面靠这个差值说「太长，只显示开头」，打分也用它）、`score`（0—100 的整数）、`shape`（`ResidualShape | null`，`null` 表示没落在任何已知排除形态里，也就是没被降权）、`count`（这个片段在整个会话里出现几次）、`eventId`（哪一条事件，`null` 表示来自会话摘要那几个字段）。注释里写清 `count` 为什么常常是 2 的倍数：同一个串在事件正文和 `raw` 原始数据里各算一次，这是实话而不是 bug。
 - [ ] **Step 3: `RedactionReport` 加三个字段。** `residuals: RedactionResidual[]`（已排序，最多 `REDACTION_RESIDUAL_TOP` 条）、`residualsTotal: number`（排名表里不同片段的条数）、`residualsPruned: boolean`（表撞过上限，真实的不同片段比 `residualsTotal` 多）。
 - [ ] **Step 4: 在 `src/shared/constants.ts` 的 `REDACTION_*` 块末尾加七个常量，每个都带上「为什么是这个数」。** `REDACTION_RESIDUAL_MIN_LENGTH = 20`（理由见上）；`REDACTION_RESIDUAL_FULL_LENGTH = 64`（长度分打满的长度，再长也不更可疑，`sha256` 的十六进制正好 64）；`REDACTION_RESIDUAL_FULL_ENTROPY = 4.5`（熵分打满的比特/字符——随机 base64 的理论上限约 6，混合大小写数字的真实密钥落在 4.5—5.5，纯十六进制只有 4）；`REDACTION_RESIDUAL_TOP = 20`（设计文档指定的定长）；`REDACTION_RESIDUAL_MAX_TEXT = 256`（单条最多存多少字符——一张截图的 data URI 有几十万字符，既不能全存也不该全渲染）；`REDACTION_RESIDUAL_MAX_KEYS = 2000`、`REDACTION_RESIDUAL_PRUNE_TO = 1000`（排名表的上限与剪枝后的留存数，两者的关系见 Task 3 的正确性论证）。
@@ -80,10 +80,10 @@
 
 - [ ] **Step 1: `tokenize(text: string): Array<{ text: string; at: number }>`。** 一个带 `g` 标志的正则遍历，返回片段和它的起始下标。下标不进报告，只给形态判定用（`data-uri` 要回头看前面十几个字符）。函数级注释把上面那张表的三个后果写进去——这是全模块最容易被人「顺手放宽一下」的地方，理由必须留在原地。
 - [ ] **Step 2: `shannonEntropy(value: string): number`。** 按字符统计频次，`-Σ p·log2(p)`，返回比特/字符。`Math.log2` 是 IEEE-754 规定的确定性运算，同一个输入在任何机器上同一个结果；何况分数最后要 `Math.round` 成整数，浮点末位的差别根本传不出来。
-- [ ] **Step 3: `detectShape(token: string, before: string): ResidualShape | null`。** 依次判定，**第一个匹配的赢**，顺序本身就是语义：`data-uri`（往前看最多 16 个字符有没有 `base64,`）→ `integrity-hash`（`^sha(256|384|512)-`）→ `uuid`（标准 8-4-4-4-12）→ `git-sha`（`^[0-9a-f]{7,64}$`）→ `numeric`（`^[0-9.,_-]+$`）→ `lower-words`（`^[a-z][a-z0-9_.-]*$`，minified 标识符和长包名）→ `path`（含 `/` 且有两段以上）→ `long-blob`（长度 ≥ 512）。`before` 那个参数是这一步唯一的外部输入，也是回报最高的一个：带截图的会话里 data URI 的 base64 能有几十万字符，认不出它，前 20 条会被同一张图的碎片占满。
-- [ ] **Step 4: `shapePenalty(shape: ResidualShape | null): number`。** `null` 是 1，其余八个都**严格小于 1 且严格大于 0**：`data-uri` 0.05、`numeric` 0.05、`integrity-hash` 0.1、`lower-words` 0.1、`long-blob` 0.1、`uuid` 0.15、`git-sha` 0.2、`path` 0.2。函数上方写清「大于 0」这件事和「排除只降权、不删除」是同一句话的两种说法：乘 0 就等于删除。
-- [ ] **Step 5: `scoreResidual(token: string, before: string): { score: number; shape: ResidualShape | null }`。** 三项加权：`0.45 × 熵分 + 0.30 × 混合度 + 0.25 × 长度分`，再乘形态系数，再 `Math.round(100 × …)`。熵分 = `min(1, 熵 / 4.5)`；混合度 = `(用到的字符类数 − 1) / 3`，四类是小写、大写、数字、其他；长度分 = `min(1, (长度 − 20) / 44)`。手算几个基准写进注释：20 字符大小写数字混排的密钥约 63 分，40 字符的十六进制提交号约 12 分，UUID 约 10 分，长 POSIX 路径约 15 分，data URI 的 base64 约 4 分。三个权重的排序（熵 > 混合度 > 长度）也说清：长度最弱是因为日志里长东西太多了，它只该在前两项已经可疑时帮忙加一点。
-- [ ] **Step 6: 写 `tests/redaction/residualScore.test.ts`。** 分词：19 字符落榜 / 20 字符入选；中文不成词；`[已打码]` 不成词且不粘连两边；`C:\Users\demo\project` 切碎后一个都不剩。熵：全同字符是 0，`0123456789abcdef` 均匀分布正好 4。形态：八类各给一个真实样例，断言认对；`before` 里有 `base64,` 时优先认成 `data-uri`。打分：系数全在 `(0, 1)` 开区间；同一串加长不会更低分；多一个字符类不会更低分；一个既是高熵又长得像 UUID 的串**依然有正分**（这条是「降权不删除」在单测里的样子）。
+- [ ] **Step 3: `detectShape(token: string, before: string): ResidualShape | null`。** 依次判定，**第一个匹配的赢**，顺序本身就是语义：`data-uri`（往前看最多 16 个字符，`before` 以 `base64,` 结尾）→ `integrity-hash`（`^sha(256|384|512)-`）→ `uuid`（标准 8-4-4-4-12）→ `call-id`（`^call_[A-Za-z0-9]+$`）→ `git-sha`（`^[0-9a-f]{7,64}$`）→ `numeric`（`^[0-9._,-]+$`）→ `lower-words`（`^[a-z][a-z0-9._-]*$`，minified 标识符和长包名）→ `dotted-name`（`^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)+$`，点分的大小写混排标识符）→ `long-blob`（长度 ≥ 512）→ `path`（含两个以上 `/`，且不含 `+` `=`）。最后两条的顺序与直觉相反，理由是 base64 的字母表里有 `/`：一坨随机 base64 很容易凑出两三个斜杠，先判长度能让它落进 `long-blob` 而不是伪装成路径；`+` 和 `=` 只在 base64 里出现，拿它们当 `path` 的排除项最省事。两处插队也各有理由：`call-id` 排在 `git-sha` 前面，因为它带下划线、和前面几条都不冲突，早判早停；`dotted-name` 排在 `lower-words` **后面**，因为一个全小写的点分名字该说成「全小写的标识符」，那是更具体的一句话，于是落到 `dotted-name` 的只剩下真正大小写混排的那些——正是它们靠混合度那一项躲过了降权。`dotted-name` 只认 `.`，不认 `-` 和 `_`：base64url 的字母表里有后两个，认了就会把真密钥一起降权；`.` 不在任何 base64 变体里，而三段点分的 JWT 早在 `known-secret:jwt` 那一步就被打掉了，到不了这里。`before` 那个参数是这一步唯一的外部输入，也是回报最高的一个：带截图的会话里 data URI 的 base64 能有几十万字符，认不出它，前 20 条会被同一张图的碎片占满。
+- [ ] **Step 4: `shapePenalty(shape: ResidualShape | null): number`。** `null` 是 1，其余十个都**严格小于 1 且严格大于 0**：`data-uri` 0.05、`numeric` 0.05、`call-id` 0.05、`integrity-hash` 0.1、`lower-words` 0.1、`dotted-name` 0.1、`long-blob` 0.1、`uuid` 0.15、`git-sha` 0.2、`path` 0.2。压得最狠的那一档是量最大的三类；`call-id` 还多一条理由：那串东西是这个工具的管线自己写进 `call_id` 字段的，压根不是任何人给的凭据。压得最轻的是 `uuid` / `git-sha` / `path`——这三种形态里**真的**可能藏着别人给的凭据。函数上方写清「大于 0」这件事和「排除只降权、不删除」是同一句话的两种说法：乘 0 就等于删除。
+- [ ] **Step 5: `scoreResidual(token: string, before: string): { score: number; shape: ResidualShape | null }`。** 三项加权：`0.45 × 熵分 + 0.30 × 混合度 + 0.25 × 长度分`，再乘形态系数，再 `Math.round(100 × …)`。熵分 = `min(1, 熵 / 4.5)`；混合度 = `(用到的字符类数 − 1) / 3`，四类是小写、大写、数字、其他；长度分 = `min(1, max(0, (长度 − 20) / 44))`。**熵和混合度只看开头 256 个字符**（也就是 `REDACTION_RESIDUAL_MAX_TEXT`，面板上真正显示出来的那一段）：既省掉对几十万字符求熵的开销，也让「分数」和「用户看到的东西」对得上；长度分用的是**真实**长度。实测基准写进注释、同时钉进单测：20 字符混排密钥 63 分、44 字符的同类 79 分、长 POSIX 路径 13 分、40 位十六进制提交号 12 分、UUID 10 分、锁文件完整性串 10 分、超长数据块 10 分、点分的代码名字 7 分、长小写包名 6 分、data URI 的 base64 5 分、工具调用 id 4 分、毫秒时间戳 2 分 —— 真密钥和噪音之间隔着五倍，这才是排序有用的原因。三个权重的排序（熵 > 混合度 > 长度）也说清：长度最弱是因为日志里长东西太多了，它只该在前两项已经可疑时帮忙加一点。
+- [ ] **Step 6: 写 `tests/redaction/residualScore.test.ts`。** 分词：19 字符落榜 / 20 字符入选；中文不成词；`[已打码]` 不成词且不粘连两边；`C:\Users\demo\project` 切碎后一个都不剩。熵：全同字符是 0，`0123456789abcdef` 均匀分布正好 4。形态：十类各给一个真实样例，断言认对；样例表写成 `Record<ResidualShape, …>`，将来联合类型多一种形态、这里少一条样例，`pnpm typecheck` 直接红；`before` 里有 `base64,` 时优先认成 `data-uri`。打分：系数全在 `(0, 1)` 开区间；同一串加长不会更低分；多一个字符类不会更低分；一个既是高熵又长得像 UUID 的串**依然有正分**（这条是「降权不删除」在单测里的样子）。
 - [ ] **Step 7: `pnpm vitest run tests/redaction/residualScore.test.ts`。** 这个模块此刻还没有任何调用方，能独立跑绿本身就是它值得单独存在的证明。
 
 ---
@@ -122,9 +122,9 @@
 - [ ] **Step 2: 扫描本身十行左右：`tokenize` 出来的每个片段，取它前面最多 16 个字符当 `before`，`scoreResidual` 一次，然后**无条件**报给 sink。** 这里没有任何「分数太低就不报」的判断（Global Constraints 第一条），也没有「跳过占位符」的判断——`[已打码]` 里的方括号和中文都不在分词表内，它压根不会成词。写一句注释说明这个判断为什么不需要存在，比写一个永假的 `if` 好：永假的 `if` 会让下一个人以为它在防什么。
 - [ ] **Step 3: 检查 `redactSummary` 那一侧。** 摘要字段走的也是 `redactText`，所以残留会自动被收进来，`eventId` 是 `null`（`scopedTo` 只包事件那一路）。面板对 `eventId === null` 的行已经有现成待遇：不可点击、纯 `<div>`。确认这条路径不需要改代码，把结论写进 Task 5 的注释里。
 - [ ] **Step 4: 在 `library.ts` 的 `auditSession` 里洗残留原文。** `hidePaths` 打开时，`residuals` 的每条 `text` 过一遍 `maskHomePaths(text, paths)`，和现在洗 `maskedContext` 完全同一个动作。这一步的必要性值得在注释里说一句：残留是**唯一**显示原文的那一段，漏掉它，这个面板就成了全应用唯一一个泄露真实用户名的地方——和 B1 防的是同一类 bug，只是低了一层。顺便写清分数是**洗之前**算的（可疑度不该被显示口径改变），显示是**洗之后**的。
-- [ ] **Step 5: 建 `tests/fixtures/redaction-residual.jsonl`。** 一条用户消息 + 一条助手消息 + 一条命令事件，里面塞：**一个任何规则都认不出来的密钥**（44 字符、大小写数字混排、不带任何键名、不在任何已知格式里——它必须真的躲过全部六条规则，否则这个 fixture 在验一件没发生的事）；八类噪音各一份（`a3f5c9e1…` 40 位提交号、`sha512-` 开头的锁文件完整性串、标准 UUID、`/home/demo/project/src/main.ts`、`data:image/png;base64,…` 的一段、一串纯数字、一个长小写包名、一坨 512 字符以上的 base64）；再加一个用户主目录路径，用来验 Step 4。
-- [ ] **Step 6: 建 `tests/redaction/residualRanking.test.ts`——这一期的验收测试。** 五组：**一，排序**——那个真密钥的分数高于八类噪音里的每一个，八条独立断言而不是一条 `every`，这样挂的时候直接看出是哪一类噪音冒了头。**二，降权不删除**——八类噪音**全都在** `residuals` 里（可能不在前几名，但一条都不许消失），这是 Global Constraints 第二条在测试里的样子。**三，剪枝后仍然精确**——灌进 2000 条以上互不相同的低分片段再加一个高分的，断言高分那条是第一名、`residualsPruned` 为 `true`、`residuals` 正好 20 条。**四，可复现**——同一个会话审两次，两份 `residuals` 深度相等。**五，路径**——`hidePaths` 打开时残留原文里出现 `~` 而不出现真实用户名，关掉时相反。
-- [ ] **Step 7: `pnpm vitest run tests/redaction` 全跑。** 关键是 `reportSecrets.test.ts` 必须**不改一个字符就绿**：它把整份报告序列化之后搜六个假密钥的本体，而 `residuals` 现在也在那份序列化里了。它绿，就等于自动证明了残留来自打过码的文本。要是它红，别去改它——那说明扫描位置错了。
+- [ ] **Step 5: 建 `tests/fixtures/redaction-residual.jsonl`。** 一条用户消息 + 一条助手消息 + 一条命令事件，里面塞：**一个任何规则都认不出来的密钥**（44 字符、大小写数字混排、不带任何键名、不在任何已知格式里——它必须真的躲过全部六条规则，否则这个 fixture 在验一件没发生的事）；十类噪音各一份（`a3f5c9e1…` 40 位提交号、`sha512-` 开头的锁文件完整性串、标准 UUID、`/home/demo/project/src/main.ts`、`data:image/png;base64,…` 的一段、一串纯数字、一个长小写包名、一坨 512 字符以上的 base64、一个点分的大小写混排标识符、一个 `call_` 开头的工具调用 id）；再加一个用户主目录路径，用来验 Step 4。五处细节是写的时候撞出来的，都不是可选的：`cwd` 与主目录必须是 **POSIX** 的（Windows 路径被分词器按 `\` 切碎，一个片段都留不下来，第五组于是变成空验）；密钥前面的引导词用**全角**「：」（`KEY_VALUE_PATTERN` 只认 ASCII 的 `:` / `=` / `=>`，用半角的话它会被当成 `键: 值` 打掉，fixture 又在验一件没发生的事）；纯数字那一份得带上 `.`（`GIT_SHA_PATTERN` 先判，一串 64 位以内的纯数字会被认成 `git-sha` 而不是 `numeric`）；点分标识符里得有个大写字母、而且后面**不能**紧跟 ASCII 句点（没大写字母它会先落进 `lower-words`；`.` 在分词表内，句点会被粘进片段末尾从而不匹配 `DOTTED_NAME_PATTERN`——所以那句话用中文句号收尾）；调用 id 得放进**真的** `call_id` 字段而不是正文里抄一串，且长度过得了 20 字符的门（`call_audit` 那种十个字符的短 id 压根不会成词，而真实数据里挤占前 20 的正是字段里那些二十几字符的）。
+- [ ] **Step 6: 建 `tests/redaction/residualRanking.test.ts`——这一期的验收测试。** 五组：**一，排序**——那个真密钥的分数高于十类噪音里的每一个，十条独立断言而不是一条 `every`，这样挂的时候直接看出是哪一类噪音冒了头。**二，降权不删除**——十类噪音**全都在** `residuals` 里（可能不在前几名，但一条都不许消失），这是 Global Constraints 第二条在测试里的样子。**三，剪枝后仍然精确**——灌进 2000 条以上互不相同的低分片段再加一个高分的，断言高分那条是第一名、`residualsPruned` 为 `true`、`residuals` 正好 20 条。**四，可复现**——同一个会话审两次，两份 `residuals` 深度相等。**五，路径**——`hidePaths` 打开时残留原文里出现 `~` 而不出现真实用户名，关掉时相反。测试搭在 `SessionLibrary` + 假文件系统上，**不能**用 `loadFixture()`：后者把 `homeDir` 钉死在 `C:\Users\demo`，第五组会因此空验。表里找条目一律按**开头**找，不用全等——超长的两条只存开头，路径那条还被洗过主目录，全等断言会挂在这两件**正确**的事情上。
+- [ ] **Step 7: `pnpm vitest run tests/redaction` 全跑。** 关键是 `reportSecrets.test.ts` 必须**不改一个字符就绿**：它把整份报告序列化之后搜六个假密钥的本体，而 `residuals` 现在也在那份序列化里了。它绿，就等于自动证明了残留来自打过码的文本。要是它红，别去改它——那说明扫描位置错了。跑出来的实测：这份 fixture 出 18 个不同片段，那个谁都没认出来的密钥 **79 分**排第一，其余 17 条全落在 **2—14 分**（埋进去的那十类是 2—13 分；14 分那条不是埋的，是命令行里 `/usr/local/...` 那个 loader 的绝对路径），命中与排除都是 0（这份 fixture 是专门只验残留的）。顺带记一件事：base64 数据块在表里出现**两次**，576 字符一条、577 字符另一条且开头多一个 `n`——`raw` 里那层嵌套 JSON 的 `\n` 是反斜杠加字母两个字符，字母 `n` 又在分词表内，于是被粘进了片段开头。这不是 bug，是「同一个串在正文和 `raw` 里各算一次」的一个变体。
 
 ---
 
@@ -136,8 +136,8 @@ B1 在 `ReportBody` 的文档注释里留了话：「中间不放占位块 —�
 
 每行给四样东西：分数徽标、原文（等宽、`break-all`）、形态说明（只在被降权时出现）、出现次数（只在大于 1 时出现）。形态说明那一句是这一段的**可解释性**所在——「看起来像 git 提交号（已降权）」让用户能够反推排名，而不是面对一个不知从何而来的数字。分数徽标不上颜色深浅，只是个数：一上色就又变成告警了。
 
-- [ ] **Step 1: 在 `src/renderer/lib/redactionLabels.ts` 加 `RESIDUAL_SHAPE_LABELS: Record<ResidualShape, string>` 和 `residualShapeLabel(shape)`。** 八条中文说法：git 提交号 / 依赖锁文件的完整性校验值 / UUID / 文件路径 / 纯数字 / 全小写的标识符 / 内嵌图片数据 / 超长的 base64 数据块。仍然**没有兜底文案**——这个文件的头注释已经把理由写透了，`Record<ResidualShape, string>` 让漏配变成编译错误而不是界面上一句「未知形态」。
-- [ ] **Step 2: 在 `tests/renderer/redactionLabels.test.ts` 加一个 describe。** 八种形态：每条说法非空、互不相同、不含形态 id 本身（`git-sha` 的说法里不许出现 `git-sha`，跟现有那条规则同一个理由：给用户看的字里不该有内部标识）。数组写成 `readonly ResidualShape[]` 字面量——将来联合类型加了第九种，`Record` 先在 typecheck 里红，这条测试再补上说法，两道关卡顺序刚好。
+- [ ] **Step 1: 在 `src/renderer/lib/redactionLabels.ts` 加 `RESIDUAL_SHAPE_LABELS: Record<ResidualShape, string>` 和 `residualShapeLabel(shape)`。** 十条中文说法：git 提交号 / 依赖锁文件的完整性校验值 / UUID / 文件路径 / 纯数字 / 全小写的标识符 / 点分的代码标识符 / 工具调用 id / 内嵌图片数据 / 超长的 base64 数据块。仍然**没有兜底文案**——这个文件的头注释已经把理由写透了，`Record<ResidualShape, string>` 让漏配变成编译错误而不是界面上一句「未知形态」。
+- [ ] **Step 2: 在 `tests/renderer/redactionLabels.test.ts` 加一个 describe。** 十种形态：每条说法非空、互不相同、不含形态 id 本身（`git-sha` 的说法里不许出现 `git-sha`，跟现有那条规则同一个理由：给用户看的字里不该有内部标识）。数组写成 `readonly ResidualShape[]` 字面量——将来联合类型加了第十一种，`Record` 先在 typecheck 里红，这条测试再补上说法，两道关卡顺序刚好。
 - [ ] **Step 3: 在 `RedactionReportDialog.tsx` 里加 `ResidualSection`，插在「打掉了什么」和「什么被判为不是密钥」之间。** `SectionHead` 复用现成的，`count` 传 `${report.residualsTotal} 个片段`。段首一句话说清这一段在说什么、以及它为什么不是告警；`residualsPruned` 为真时换一句：「片段太多，只拿最可疑的一批参与了排名」。
 - [ ] **Step 4: 加 `ResidualRow`。** 复用 B1 的 `SAMPLE_SHELL` 常量和 `SampleRow` 那套「能定位就是 `<button>`、不能就是 `<div>`」的写法——`locateEvent(eventId)` 返回 `null`（事件已经不在了，或者残留来自会话摘要、`eventId` 本来就是 `null`）时不给一个点不动的按钮。`length > text.length` 时在原文后面补一句「共 N 字符，只显示开头」。
 - [ ] **Step 5: 空列表的文案。** 一句「没有找到 20 字符以上的高熵片段」加一句「这不等于没漏东西——短的、或者混在正常文字里的，这一段看不见」。第二句是这一段的诚实底线，不许省。
@@ -149,9 +149,23 @@ B1 在 `ReportBody` 的文档注释里留了话：「中间不放占位块 —�
 
 设计文档第七节给 B2 的验收条件是「在真实数据上跑一遍，前 20 条人工确认可读」。前面五个任务只保证了「排序是对的、可复现的」，**可读**这件事只能靠眼睛。
 
-- [ ] **Step 1: `pnpm verify` 全绿。** typecheck + lint + test 一次过。测试总数应该是 44 个文件 / 708 条的基础上加这一期新增的量，把实际数字记下来——写 PR 正文时要用真数，不要凭印象。
-- [ ] **Step 2: 起应用，载入示例数据，逐个会话点开打码报告，看中间那一段。** 这是验收行里「人工确认」那半句，没有替代品。要回答三个问题：前 20 条里有多少是明显的噪音（一半以上就说明降权系数还得调）；有没有哪一类噪音整批冒到顶上（那说明少了一种形态判定）；每一行的形态说明读起来是不是真的解释了它为什么排在那儿。
-- [ ] **Step 3: 挑一个自己真实的会话再跑一遍。** 示例数据是干净的，真实会话才有锁文件哈希、截图、minified 片段这些东西。观察到的前几行记在提交正文里——这是这一期唯一能留下的验收证据。
-- [ ] **Step 4: 如果调了系数，回来改 `residual.ts` 里那几个手算基准的注释，也改这份计划里的数字。** 文档和代码得对上：注释里写着「约 63 分」而代码算出 41 分，比没有注释更糟。
+- [ ] **Step 1: `pnpm verify` 全绿。** typecheck + lint + test 一次过。测试总数应该是 44 个文件 / 708 条的基础上加这一期新增的量，把实际数字记下来——写 PR 正文时要用真数，不要凭印象。实测 **46 个文件 / 776 条**（新增两个文件：`residualScore.test.ts` 51 条、`residualRanking.test.ts` 9 条；`sink.test.ts` 与 `redactionLabels.test.ts` 各有追加）。三个「一个字符都不许改」的文件——`redact.test.ts` 38 条、`maskPaths.test.ts` 8 条、`reportSecrets.test.ts` 5 条——从头到尾没动过，全绿。
+- [ ] **Step 2: 起应用，载入示例数据，逐个会话点开打码报告，看中间那一段。** 这是验收行里「人工确认」那半句，没有替代品。要回答三个问题：前 20 条里有多少是明显的噪音（一半以上就说明降权系数还得调）；有没有哪一类噪音整批冒到顶上（那说明少了一种形态判定）；每一行的形态说明读起来是不是真的解释了它为什么排在那儿。三个问题的答案都得是**量出来的**，所以实际做法是拿真实会话直接走 `redactSession` + `collector.summarize` 这条送进面板的同一条路，把每份报告的前 20 条汇总统计（示例数据太干净，答不了第二问）。
+- [ ] **Step 3: 挑一个自己真实的会话再跑一遍。** 示例数据是干净的，真实会话才有锁文件哈希、截图、minified 片段这些东西。观察到的前几行记在提交正文里——这是这一期唯一能留下的验收证据。**但记下来的只能是分布，不能是片段本身**：这个仓库是公开的，而残留条目存的正是原文，把真实会话里的高熵串抄进提交历史，等于亲手做了这个面板要防的那件事。所以证据的形状是百分比、形态计数、分数区间与长度区间。
+- [ ] **Step 4: 如果调了系数，回来改 `residual.ts` 里那几个手算基准的注释，也改这份计划里的数字。** 文档和代码得对上：注释里写着「约 63 分」而代码算出 41 分，比没有注释更糟。**实际没调任何一个系数**——量出来的结论是「少了两种形态」而不是「系数不对」，所以改的是形态表：`residual.ts` 的基准注释列全十条（13/12/10/10/10/7/6/5/4/2），这份计划里凡是写「八」的地方也一并跟上。
+
+**Step 2/3 的实测结果**（用户自己 24 个最大的真实会话，各取报告前 20 条，合计 480 行）：
+
+| | 加两种形态之前 | 之后 |
+| --- | --- | --- |
+| `call_` 调用 id | 156 行，占 null 形态的 33.4%，分数 78—80 | 0 行 |
+| 点分的大小写混排标识符 | 66 行，占 14.1%，分数 65—99 | 0 行 |
+| 这两族合计 | **222 / 480 = 46.3%** | **0** |
+| 认出形态的（也就是「明显的噪音」） | —— | 13 行 = **2.7%**，全是 `path`、全是 20 分 |
+| 没认出形态的 | —— | 467 行 = 97.3%，分数 43—100，长度 20—504 |
+| 分数最高的 30 行 | —— | 全部 100 分、长度 67—504、全部「没认出来」 |
+
+三个问题于是各有答案。第一问：**2.7%**，远在一半以下，系数不用动。第二问：**有，而且是两族**，46.3% 的席位被它们占着，正好命中「那说明少了一种形态判定」——于是加了 `call-id` 与 `dotted-name` 两种形态，再量一次是 0。腾出来的那 222 个席位现在装的是没有任何规则、也没有任何形态能解释的片段，最顶上一律是 100 分的长高熵块——那正是这一段该显示的东西。第三问：剩下 13 条带形态的都写着「看起来像文件路径（已降权）」，读起来确实解释了它们为什么排在下面；没认出形态的那些不带形态说明，因为它们确实一分都没被扣——空着比编一句「未识别」更准。
+
 - [ ] **Step 5: 更新 `docs/design/2026-09-05-parity-and-shareability-design.md` 第五节风险表「残留检测超时」那一行。** 这一期没有用挂钟超时兑现它，用的是「排名表上限 + 剪枝后前 20 仍精确」这套确定性的办法，理由是挂钟和「排序稳定且可复现」直接冲突。把这个替换写进风险表，别让文档留着一条实现里不存在的缓解措施。
 - [ ] **Step 6: 按仓库惯例提交。** 提交主题走 `feat(redaction): …`，正文中文，说清三件事：这一期解决的是「规则没匹配上的那些」；「只排序不告警」和「降权不删除」这两个决定的理由；前 20 条精确性是有论证的，不是近似。
