@@ -27,6 +27,7 @@ import { LocalStore } from '../../src/main/storage/store'
 import { createCollector, type ResidualInput } from '../../src/main/redaction/report'
 import {
   REDACTION_RESIDUAL_MAX_KEYS,
+  REDACTION_RESIDUAL_MAX_TEXT,
   REDACTION_RESIDUAL_TOP
 } from '../../src/shared/constants'
 import type { RedactionReport, RedactionResidual, ResidualShape } from '../../src/shared/types'
@@ -210,5 +211,40 @@ describe('残留显示原文，但主目录仍然要洗掉', () => {
 
     expect(residualOf(report, `${HOME}/projects/gleam-residual/src/main.ts`).shape).toBe('path')
     expect(report.residuals.some((item) => item.text.startsWith('~/'))).toBe(false)
+  })
+
+  /**
+   * 洗主目录会让 `text` 变短，而 `length` 记的是原文真实长度。界面用
+   * `length > text.length` 判断「这条被截断了，只显示了开头」——
+   * 洗白把这个比较变成真，于是一条完整显示的路径被说成「共 N 字符，只显示开头」。
+   *
+   * 少掉的字符是洗掉的，不是截掉的。截断与否只由 `report.ts` 那一刀决定，
+   * 所以 `auditSession` 洗完之后要把没截断的那些 `length` 跟着缩回去。
+   */
+  it('洗短的路径不会被说成「只显示开头」', async () => {
+    const report = await auditFixture()
+    const residual = residualOf(report, MASKED_PATH)
+
+    // 前提：这条确实被洗短了（`~` 比 `/home/demo` 短）。前提不成立的话下面那条
+    // 断言就成了空验 —— 它会在任何实现下都绿。
+    expect(MASKED_PATH.length).toBeLessThan(
+      `${HOME}/projects/gleam-residual/src/main.ts`.length
+    )
+    expect(residual.length).toBe(residual.text.length)
+  })
+
+  it('真的被截断时，`length` 仍然是截断前的真实长度', async () => {
+    // 反向的另一半：上一条不能靠「把 length 一律钉成 text.length」来满足，
+    // 那样会把真截断的提示也一起弄没。fixture 里那条超长 base64 数据块正是
+    // 撞过 REDACTION_RESIDUAL_MAX_TEXT 的一条。
+    const report = await auditFixture()
+    const truncated = report.residuals.filter(
+      (item) => item.text.length === REDACTION_RESIDUAL_MAX_TEXT
+    )
+
+    expect(truncated.length).toBeGreaterThan(0)
+    for (const item of truncated) {
+      expect(item.length).toBeGreaterThan(item.text.length)
+    }
   })
 })

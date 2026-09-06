@@ -271,10 +271,22 @@ export class SessionLibrary {
       // 漏掉这一步，这个面板就成了全应用唯一一个漏出真实用户名的地方 —— 和上面防的是
       // 同一类 bug，只是低了一层。分数是**洗之前**算的（可疑度不该被显示口径改变），
       // 显示的是**洗之后**的。
-      residuals: report.residuals.map((residual) => ({
-        ...residual,
-        text: maskHomePaths(residual.text, paths)
-      }))
+      residuals: report.residuals.map((residual) => {
+        // 截断与否必须在洗之前判：`report.ts` 那一刀（切到 REDACTION_RESIDUAL_MAX_TEXT）
+        // 是唯一会造成「只显示开头」的地方，此刻 `length` 与 `text` 都还没被这一层动过。
+        const truncated = residual.length > residual.text.length
+        const text = maskHomePaths(residual.text, paths)
+        return {
+          ...residual,
+          text,
+          // 洗主目录会把 `C:\Users\某某` 换成 `~`，`text` 因此变短而 `length` 不动 ——
+          // 一条只有 80 字符、根本没被截断的残留于是被说成「共 80 字符，只显示开头」。
+          // 少掉的那几个字符是洗掉的，不是截掉的，那句话是假的。
+          // 没截断就让 length 跟着缩到相等，界面自然不再提；真截断了就原样保留，
+          // 「共 N 字符」说的仍是截断前的真实长度。
+          length: truncated ? residual.length : text.length
+        }
+      })
     }
   }
 
