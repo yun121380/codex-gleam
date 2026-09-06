@@ -638,3 +638,149 @@ export interface RedactionReport {
    */
   residualsPruned: boolean
 }
+
+// ---------------------------------------------------------------------------
+// 离线自检
+// ---------------------------------------------------------------------------
+
+/** 一次被拦下来的网络请求。 */
+export interface BlockedRequest {
+  /** 被拦下来的地址，原样记录。 */
+  url: string
+  /** 拦下来的时刻，ISO 时间戳。 */
+  at: string
+  /**
+   * 这次请求是应用自己发起的，还是用户按「你自己试」触发的。
+   *
+   * 归因**必须**在拦截那一刻做完并存进这条记录里，不能事后猜：只有那一刻监视器
+   * 手里才握着「用户刚刚授权过哪个地址」这个证据。事后看着一条地址去猜它像不像
+   * 用户填的，那不是证据，那是替应用找借口。
+   */
+  origin: 'app' | 'probe'
+}
+
+/** 这次运行的拦截情况。应用一关就没了 —— 它报的是「这次运行」，不是历史。 */
+export interface InterceptLog {
+  /**
+   * 应用自身发起、而后被拦截的请求数。**这就是那个「应为 0」的指标。**
+   *
+   * 它和 `probeBlocked` 分开算，是因为演示一次拦截就把这个数弄脏的话，
+   * 这个数就再也没人看了。
+   */
+  appBlocked: number
+  /** 用户按「你自己试」触发、而后被拦截的请求数。 */
+  probeBlocked: number
+  /**
+   * 最近被拦下来的若干条，两类混排、各自带 `origin`，最多 SELF_CHECK_MAX_BLOCKED 条。
+   *
+   * **计数不受这个上限影响**：清单是给人看的样本，上面那两个数才是精确的。
+   * 和 `RedactionRuleGroup` 那里 `samples.length` 不等于 `count` 是同一个道理。
+   */
+  recent: BlockedRequest[]
+  /** 清单撞过上限，被拦下来的比列出来的多。 */
+  recentTruncated: boolean
+}
+
+/** 「你自己试」的受理结果。 */
+export interface ProbeArmResult {
+  /** 受理了没有。 */
+  ok: boolean
+  /** 受理成功时是那个地址，失败时是 null。 */
+  url: string | null
+  /**
+   * 没受理的原因，一句中文。
+   *
+   * 它是契约的一部分而不是日志：这句话要直接显示给用户看，
+   * 告诉他为什么这个地址演示不了拦截、该换成什么样的。
+   */
+  reason: string | null
+}
+
+/**
+ * 构建期校验证据，来自 `build/generated/build-evidence.json`。
+ *
+ * 每个字段都可空：`scripts/buildEvidence.mjs` 的每条失败路径都写 null，
+ * 契约得照实反映这件事，而不是假装它总能拿到。
+ */
+export interface BuildEvidence {
+  schemaVersion: number | null
+  /** 构建时的提交号。 */
+  gitSha: string | null
+  /** 构建时跑过多少条测试。 */
+  testCount: number | null
+  /** 在哪个平台上构建的。 */
+  platform: string | null
+  /** 构建时刻，ISO 时间戳。 */
+  builtAt: string | null
+}
+
+/**
+ * 完整依赖树证据，来自 `build/generated/dependency-tree.json`。
+ *
+ * **原始嵌套树不进这份报告**：`pnpm list --depth Infinity` 那份结构界面渲染不了，
+ * 拍平成「有哪些包、各是什么版本」才是人能核对的东西。想看全的，原始文件照旧
+ * 原样随包发出，自己去 `resources/generated/` 读。
+ */
+export interface DependencyEvidence {
+  /** 生成时刻，ISO 时间戳。 */
+  generatedAt: string | null
+  /** 去重后的包数，**截断之前**的真实条数。 */
+  packageCount: number
+  /** 已去重、已排序，最多 SELF_CHECK_MAX_PACKAGES 条。 */
+  packages: Array<{ name: string; version: string }>
+  /** 列表撞过上限，`packageCount` 比 `packages.length` 大。 */
+  packagesTruncated: boolean
+}
+
+/** 读一次自检报告。 */
+export interface SelfCheckRequest {
+  /**
+   * 顺便授权这个地址走一次「你自己试」。
+   *
+   * 不带就只是读一份报告；带上就先授权、再读一份报告，受理结果在
+   * `SelfCheckReport.probeArm` 里带回去。一个频道两层活，和 `sessions:search` 同一个路子。
+   */
+  armProbe?: string
+}
+
+/** 一份离线自检报告。全部来自这次运行的真实对象与真实计数，没有一处是从文档里抄的。 */
+export interface SelfCheckReport {
+  /** 开发模式还是打包后运行。 */
+  mode: 'dev' | 'packaged'
+  intercept: InterceptLog
+  csp: {
+    /**
+     * 这次运行**真的加过的那条**响应头。
+     *
+     * 开发模式下是 null —— 那道头被 `if (!options.isDev)` 挡着，根本没装。
+     * 它不是「常量的值」：把常量拿出来当「当前生效」，页面就比护栏更乐观了。
+     */
+    responseHeader: string | null
+    /** 这条头真的加过几次。 */
+    appliedCount: number
+  }
+  tls: {
+    /** 验证器装上了没有。 */
+    installed: boolean
+    /** 验证器恒定返回的那个判决值，来自 `TLS_UNTRUSTED_VERDICT`。 */
+    verdict: number
+    /**
+     * 验证器被问过几次。
+     *
+     * **正常情况下这个数一直是 0**，因为本应用不发起 TLS 连接。
+     * 0 是预期，不是「没接上线」。
+     */
+    calls: number
+  }
+  build: BuildEvidence | null
+  dependencies: DependencyEvidence | null
+  /** 这次没带 `armProbe` 时是 null。 */
+  probeArm: ProbeArmResult | null
+  /**
+   * 读构建期证据时出的岔子，逐条中文原因。
+   *
+   * 空数组表示没岔子 —— 注意「没岔子」和「没证据」是两件事：开发模式下压根没有
+   * 那个目录，那不是岔子，页面自己会说。
+   */
+  evidenceIssues: string[]
+}
